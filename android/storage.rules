@@ -1,0 +1,40 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    match /avatars/{uid}/{fileName} {
+      allow read: if isSignedIn();
+      allow write: if isSignedIn() && request.auth.uid == uid
+        && request.resource.size <= 10 * 1024 * 1024
+        && request.resource.contentType.matches('image/.*');
+    }
+
+    match /chats/{chatId}/{folder}/{fileName} {
+      allow read: if isSignedIn()
+        && firestore.exists(/databases/(default)/documents/chats/$(chatId)/members/$(request.auth.uid));
+      allow write: if isSignedIn()
+        && firestore.exists(/databases/(default)/documents/chats/$(chatId)/members/$(request.auth.uid))
+        && (
+          (folder == 'images' && request.resource.size <= 10 * 1024 * 1024 && request.resource.contentType.matches('image/.*')) ||
+          (folder == 'audio' && request.resource.size <= 10 * 1024 * 1024 && request.resource.contentType.matches('audio/.*')) ||
+          (folder == 'videos' && request.resource.size <= 25 * 1024 * 1024 && request.resource.contentType.matches('video/.*'))
+        );
+    }
+
+    match /statuses/{uid}/{fileName} {
+      allow read: if isSignedIn();
+      allow write: if isSignedIn() && request.auth.uid == uid
+        && (
+          (request.resource.size <= 10 * 1024 * 1024 && request.resource.contentType.matches('image/.*')) ||
+          (request.resource.size <= 25 * 1024 * 1024 && request.resource.contentType.matches('video/.*'))
+        );
+    }
+  }
+}

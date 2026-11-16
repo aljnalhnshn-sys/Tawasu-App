@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">تواصل</string>
+    <string name="default_notification_channel_id">tawasul_messages</string>
+    <string name="default_notification_channel_name">الرسائل الجديدة</string>
+    <string name="calls_notification_channel_id">tawasul_calls</string>
+    <string name="calls_notification_channel_name">المكالمات الواردة</string>
+</resources>
