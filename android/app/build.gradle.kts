@@ -35,10 +35,10 @@ android {
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
-        val webClientId = localProps.getProperty("GOOGLE_WEB_CLIENT_ID")
-            ?: System.getenv("GOOGLE_WEB_CLIENT_ID")
+        val webClientId = localProps.getProperty("GOOGLE_WEB_CLIENT_ID")?.takeIf { it.isNotBlank() }
+            ?: System.getenv("GOOGLE_WEB_CLIENT_ID")?.takeIf { it.isNotBlank() }
             ?: "REPLACE_WITH_FIREBASE_WEB_CLIENT_ID"
-        buildConfigField("String", "GOOGLE_WEB_CLIENT_ID", "\"$webClientId\"")
+        buildConfigField("String", "GOOGLE_WEB_CLIENT_ID", "\"${webClientId.trim()}\"")
     }
 
     buildTypes {

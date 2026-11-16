@@ -10,6 +10,7 @@ import com.tawasul.app.repositories.AuthRepository
 import com.tawasul.app.repositories.ChatRepository
 import com.tawasul.app.repositories.MediaRepository
 import com.tawasul.app.repositories.UserRepository
+import io.mockk.coEvery
 import io.mockk.every
 import io.mockk.mockk
 import kotlinx.coroutines.Dispatchers
@@ -42,7 +43,7 @@ class ChatViewModelTest {
     }
 
     @Test
-    fun `sending message while offline marks message as FAILED for retry`() = runTest {
+    fun `sending message while offline marks message as FAILED for retry`() = runTest(testDispatcher) {
         val firebaseUser = mockk<FirebaseUser> { every { uid } returns "uid_me" }
         val authRepo = mockk<AuthRepository> {
             every { currentUser } returns firebaseUser
@@ -51,7 +52,10 @@ class ChatViewModelTest {
         val chatRepo = mockk<ChatRepository>(relaxed = true) {
             every { observeLatestMessages(any(), any()) } returns emptyFlow()
         }
-        val userRepo = mockk<UserRepository>(relaxed = true)
+        val userRepo = mockk<UserRepository>(relaxed = true) {
+            every { observeUserProfile(any()) } returns emptyFlow()
+            coEvery { getUserProfile(any()) } returns null
+        }
         val mediaRepo = mockk<MediaRepository>(relaxed = true)
         val voiceMgr = mockk<VoiceRecorderManager>(relaxed = true)
         val connectivity = mockk<ConnectivityObserver> {
