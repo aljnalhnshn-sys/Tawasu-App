@@ -1,6 +1,7 @@
 package com.tawasul.app.data.remote
 
 object FirestorePaths {
+    const val DATABASE_ID = "ai-studio-f0a6dc55-c580-4b93-91e9-381782a539f0"
     const val USERS = "users"
     const val PRIVATE_SUBCOLLECTION = "private"
     const val PRIVATE_INFO_DOC = "info"

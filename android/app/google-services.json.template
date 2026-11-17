@@ -1,26 +1,26 @@
 {
   "project_info": {
-    "project_number": "REPLACE_WITH_PROJECT_NUMBER",
-    "project_id": "REPLACE_WITH_FIREBASE_PROJECT_ID",
-    "storage_bucket": "REPLACE_WITH_PROJECT_ID.firebasestorage.app"
+    "project_number": "743734969863",
+    "project_id": "stalwart-overview-sklwk",
+    "storage_bucket": "stalwart-overview-sklwk.firebasestorage.app"
   },
   "client": [
     {
       "client_info": {
-        "mobilesdk_app_id": "1:REPLACE:android:REPLACE",
+        "mobilesdk_app_id": "1:743734969863:android:REGISTER_IN_FIREBASE_CONSOLE",
         "android_client_info": {
           "package_name": "com.tawasul.app"
         }
       },
       "oauth_client": [
         {
-          "client_id": "REPLACE_WITH_WEB_CLIENT_ID.apps.googleusercontent.com",
+          "client_id": "743734969863-bck4iloasoa4bu33e40hm292ckhje64b.apps.googleusercontent.com",
           "client_type": 3
         }
       ],
       "api_key": [
         {
-          "current_key": "REPLACE_WITH_ANDROID_API_KEY"
+          "current_key": "REPLACE_WITH_ANDROID_API_KEY_FROM_FIREBASE_CONSOLE"
         }
       ]
     }

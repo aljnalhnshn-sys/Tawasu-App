@@ -1,5 +1,6 @@
 package com.tawasul.app.data.remote
 
+import com.google.firebase.FirebaseApp
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.FirebaseFirestoreSettings
@@ -23,7 +24,10 @@ object FirebaseModule {
     @Provides
     @Singleton
     fun provideFirebaseFirestore(): FirebaseFirestore {
-        return FirebaseFirestore.getInstance().apply {
+        return FirebaseFirestore.getInstance(
+            FirebaseApp.getInstance(),
+            FirestorePaths.DATABASE_ID
+        ).apply {
             firestoreSettings = FirebaseFirestoreSettings.Builder()
                 .setLocalCacheSettings(PersistentCacheSettings.newBuilder().build())
                 .build()

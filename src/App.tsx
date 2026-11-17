@@ -208,11 +208,16 @@ export default function App() {
         return;
       }
       setSetupDisplayName(user.displayName || '');
-      const existing = await getUserProfile(user.uid);
-      setProfile(existing);
-      setProfileChecked(true);
-      if (existing?.profileCompleted) {
-        updatePresence(user.uid, true);
+      try {
+        const existing = await getUserProfile(user.uid);
+        setProfile(existing);
+        if (existing?.profileCompleted) {
+          updatePresence(user.uid, true);
+        }
+      } catch {
+        setAuthError('تعذر الاتصال بخادم البيانات حاليًا. يرجى التحقق من اتصال الإنترنت والمحاولة مرة أخرى.');
+      } finally {
+        setProfileChecked(true);
       }
     });
   }, []);
@@ -271,9 +276,13 @@ export default function App() {
       }
     });
     missing.forEach(async (peerUid) => {
-      const p = await getUserProfile(peerUid);
-      if (p) {
-        setPeerProfiles((prev) => ({ ...prev, [peerUid]: p }));
+      try {
+        const p = await getUserProfile(peerUid);
+        if (p) {
+          setPeerProfiles((prev) => ({ ...prev, [peerUid]: p }));
+        }
+      } catch {
+        // Ignore transient offline error for peer avatar/name lookup
       }
     });
   }, [chats, firebaseUser, peerProfiles]);
@@ -317,9 +326,14 @@ export default function App() {
       setUsernameValid(false);
       return;
     }
-    const res = await isUsernameAvailable(val);
-    setUsernameValid(res.available);
-    setUsernameHint(res.hint);
+    try {
+      const res = await isUsernameAvailable(val);
+      setUsernameValid(res.available);
+      setUsernameHint(res.hint);
+    } catch {
+      setUsernameValid(false);
+      setUsernameHint('تعذر التحقق من توفر اسم المستخدم حاليًا. تحقق من الاتصال.');
+    }
   };
 
   const handleCompleteOnboarding = async (e: React.FormEvent) => {

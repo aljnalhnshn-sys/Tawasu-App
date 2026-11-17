@@ -37,7 +37,7 @@ android {
 
         val webClientId = localProps.getProperty("GOOGLE_WEB_CLIENT_ID")?.takeIf { it.isNotBlank() }
             ?: System.getenv("GOOGLE_WEB_CLIENT_ID")?.takeIf { it.isNotBlank() }
-            ?: "REPLACE_WITH_FIREBASE_WEB_CLIENT_ID"
+            ?: "743734969863-bck4iloasoa4bu33e40hm292ckhje64b.apps.googleusercontent.com"
         buildConfigField("String", "GOOGLE_WEB_CLIENT_ID", "\"${webClientId.trim()}\"")
     }
 

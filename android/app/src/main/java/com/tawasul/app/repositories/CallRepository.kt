@@ -1,6 +1,7 @@
 package com.tawasul.app.repositories
 
 import com.google.firebase.firestore.FieldValue
+import com.google.firebase.firestore.Filter
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.Query
 import com.tawasul.app.data.remote.FirestorePaths
@@ -42,7 +43,12 @@ class CallRepository @Inject constructor(
 
     fun observeCallHistory(currentUid: String): Flow<List<CallSession>> = callbackFlow {
         val reg = callsCol
-            .whereArrayContains("participantUids", currentUid)
+            .where(
+                Filter.or(
+                    Filter.equalTo("callerUid", currentUid),
+                    Filter.equalTo("calleeUid", currentUid)
+                )
+            )
             .orderBy("createdAt", Query.Direction.DESCENDING)
             .limit(40)
             .addSnapshotListener { snap, err ->
@@ -72,7 +78,6 @@ class CallRepository @Inject constructor(
         offerSdp: String
     ): Result<CallSession> = runCatching {
         val ref = callsCol.document()
-        val participants = listOf(caller.uid, callee.uid)
         val payload = mapOf(
             "id" to ref.id,
             "callerUid" to caller.uid,
@@ -81,7 +86,6 @@ class CallRepository @Inject constructor(
             "calleeUid" to callee.uid,
             "calleeName" to callee.displayName,
             "calleeAvatarUrl" to callee.avatarUrl,
-            "participantUids" to participants,
             "type" to type.name,
             "status" to CallStatus.RINGING.name,
             "offerSdp" to offerSdp,
@@ -95,7 +99,7 @@ class CallRepository @Inject constructor(
             callerName = caller.displayName,
             calleeUid = callee.uid,
             calleeName = callee.displayName,
-            participantUids = participants,
+            participantUids = listOf(caller.uid, callee.uid),
             type = type.name,
             status = CallStatus.RINGING.name,
             offerSdp = offerSdp

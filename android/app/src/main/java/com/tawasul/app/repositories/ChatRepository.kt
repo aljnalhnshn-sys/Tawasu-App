@@ -54,10 +54,16 @@ class ChatRepository @Inject constructor(
 
         val chatId = FirestorePaths.directChatId(currentUid, otherUid)
         val chatRef = chatsCol.document(chatId)
-        val snapshot = chatRef.get().await()
-        if (snapshot.exists()) {
-            return@runCatching snapshot.toObject(Chat::class.java)?.copy(id = chatId)
-                ?: Chat(id = chatId, type = ChatType.DIRECT.name, participantIds = listOf(currentUid, otherUid))
+        val memberCheck = chatRef.collection(FirestorePaths.MEMBERS_SUBCOLLECTION)
+            .document(currentUid)
+            .get()
+            .await()
+        if (memberCheck.exists()) {
+            val snapshot = chatRef.get().await()
+            if (snapshot.exists()) {
+                return@runCatching snapshot.toObject(Chat::class.java)?.copy(id = chatId)
+                    ?: Chat(id = chatId, type = ChatType.DIRECT.name, participantIds = listOf(currentUid, otherUid))
+            }
         }
 
         val sortedParticipants = listOf(currentUid, otherUid).sorted()

@@ -113,7 +113,6 @@ class UserRepository @Inject constructor(
             val privatePayload = mapOf(
                 "uid" to uid,
                 "email" to email,
-                "fcmTokens" to emptyList<String>(),
                 "updatedAt" to FieldValue.serverTimestamp()
             )
             tx.set(privateRef, privatePayload, SetOptions.merge())
