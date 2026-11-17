@@ -1,789 +1,1734 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { onAuthStateChanged, type User as FirebaseUser } from 'firebase/auth';
+import type { QueryDocumentSnapshot } from 'firebase/firestore';
 import {
+  ArrowRight,
+  Ban,
   Check,
-  Copy,
-  FileCode2,
-  FolderOpen,
+  CheckCheck,
+  CircleDot,
+  Code2,
+  Image as ImageIcon,
+  LogOut,
   MessageSquare,
+  Mic,
   Moon,
   Phone,
+  RefreshCw,
   Search,
+  Send,
   Settings,
-  ShieldCheck,
+  ShieldAlert,
+  Square,
   Sun,
+  Trash2,
+  UserPlus,
   Users,
   Video,
-  Wrench,
-  CircleDot,
-  Send,
-  Mic,
-  Image as ImageIcon,
-  ArrowRight,
-  CheckCircle2,
-  AlertTriangle,
+  WifiOff,
 } from 'lucide-react';
+import { auth } from './firebase';
+import { useOnlineStatus } from './hooks/useOnlineStatus';
+import { PWAInstallButton } from './components/PWAInstallButton';
+import { AndroidProjectModal } from './components/AndroidProjectModal';
+import { WebRtcCallOverlay } from './components/WebRtcCallOverlay';
+import {
+  blockUser,
+  completeProfileSetup,
+  compressImageFileToDataUrl,
+  createGroupChat,
+  deleteAccountAndOwnedData,
+  deleteMessageForCurrentUser,
+  getOrCreateDirectChat,
+  getUserProfile,
+  isUsernameAvailable,
+  loadOlderMessages,
+  markChatAsRead,
+  markStatusViewed,
+  publishStatus,
+  searchUsersByUsername,
+  sendMessage,
+  signInWithGooglePopup,
+  signOutAccount,
+  subscribeActiveStatuses,
+  subscribeBlockedUsers,
+  subscribeCallHistory,
+  subscribeIncomingCall,
+  subscribeLatestMessages,
+  subscribeUserChats,
+  subscribeUserProfile,
+  unblockUser,
+  updateCallStatus,
+  updatePresence,
+  updatePrivacySettings,
+  updateProfileDetails,
+} from './services/tawasulService';
+import {
+  MAX_BIO_LENGTH,
+  MAX_STATUS_TEXT_LENGTH,
+  type BlockedUser,
+  type CallSession,
+  type CallType,
+  type Chat,
+  type GroupPrivacySetting,
+  type Message,
+  type StatusItem,
+  type UserPublicProfile,
+} from './types/tawasul';
 
-const androidFileModules = import.meta.glob('/android/**/*', {
-  query: '?raw',
-  import: 'default',
-  eager: true,
-}) as Record<string, string>;
+type MainTab = 'chats' | 'search' | 'status' | 'groups' | 'calls' | 'profile';
 
-type StudioTab = 'explorer' | 'preview' | 'security' | 'setup';
-type MobileScreenKey =
-  | 'welcome'
-  | 'onboarding'
-  | 'chats'
-  | 'chatDetail'
-  | 'search'
-  | 'status'
-  | 'groups'
-  | 'calls'
-  | 'profile';
+function formatArabicTime(ts: { toDate?: () => Date } | null | undefined): string {
+  if (!ts || typeof ts.toDate !== 'function') return '';
+  return new Intl.DateTimeFormat('ar-EG', {
+    hour: 'numeric',
+    minute: '2-digit',
+  }).format(ts.toDate());
+}
 
-interface AndroidFileEntry {
-  path: string;
+const Avatar: React.FC<{
   name: string;
-  layer: string;
-  content: string;
-  lines: number;
-}
-
-function classifyLayer(path: string): string {
-  if (path.includes('/authentication/')) return 'المصادقة (authentication)';
-  if (path.includes('/models/')) return 'النماذج (models)';
-  if (path.includes('/repositories/')) return 'المستودعات (repositories)';
-  if (path.includes('/messaging/')) return 'المراسلة والمكالمات (messaging)';
-  if (path.includes('/notifications/')) return 'الإشعارات (notifications)';
-  if (path.includes('/data/')) return 'البيانات (data)';
-  if (path.includes('/navigation/')) return 'التنقل (navigation)';
-  if (path.includes('/ui/')) return 'الواجهات (ui)';
-  if (path.includes('/src/test/') || path.endsWith('firestore.rules.test.ts')) return 'الاختبارات (tests)';
-  if (
-    path.endsWith('.rules') ||
-    path.endsWith('.indexes.json') ||
-    path.includes('/functions/')
-  ) {
-    return 'الأمان والسحابة (firebase)';
-  }
-  return 'إعدادات Gradle والمشروع';
-}
-
-const LAYER_ORDER = [
-  'إعدادات Gradle والمشروع',
-  'النماذج (models)',
-  'البيانات (data)',
-  'المصادقة (authentication)',
-  'المستودعات (repositories)',
-  'المراسلة والمكالمات (messaging)',
-  'الإشعارات (notifications)',
-  'التنقل (navigation)',
-  'الواجهات (ui)',
-  'الأمان والسحابة (firebase)',
-  'الاختبارات (tests)',
-];
-
-const SECURITY_PILLARS = [
-  {
-    title: 'عزل البيانات الحساسة (PII Isolation)',
-    detail:
-      'تم فصل البريد الإلكتروني ورموز الإشعارات FCM Tokens داخل المسار users/{uid}/private/info بحيث لا يستطيع قراءته سوى صاحب الحساب فقط، بينما يقتصر البحث العام على الاسم الظاهر واسم المستخدم والصورة.',
-  },
-  {
-    title: 'حجز اسم المستخدم ذريًا (Atomic Transaction)',
-    detail:
-      'يتم حجز الاسم داخل usernames/{usernameLower} باستخدام Firestore Transaction مع قواعد تمنع التعديل المباشر أو الاستيلاء على اسم مستخدم مملوك لـ UID آخر، مع التحقق غير الحساس لحالة الأحرف (3-20 حرفًا إنجليزيًا ورقمًا و_).',
-  },
-  {
-    title: 'منع المحادثات الثنائية المكررة',
-    detail:
-      'يُبنى معرّف المحادثة الثنائية بشكل حتمي عبر ترتيب المعرفين أبجديًا (uidA_uidB)، وتفرض قواعد Firestore مطابقة المعرّف للمشاركين في المحادثة الثنائية.',
-  },
-  {
-    title: 'تقييد قراءة الرسائل وكتابتها (Master Gate)',
-    detail:
-      'يخضع الوصول إلى chats/{chatId}/messages/{messageId} للتحقق من وجود العضو داخل المجموعة الفرعية members/{uid}، مع منع تزوير senderId أو تجاوز 4000 حرف أو استخدام طوابع زمنية من العميل.',
-  },
-  {
-    title: 'إشعارات FCM عبر الخادم الموثوق',
-    detail:
-      'لا توجد أي مفاتيح إدارية داخل تطبيق Android؛ تتولى دالة Cloud Function (notifyOnNewMessage) إرسال الإشعارات بعد التحقق من عدم وجود حظر بين الطرفين.',
-  },
-  {
-    title: 'شفافية سياسة التشفير والحذف',
-    detail:
-      'تم توضيح أن مصادقة Firebase وقواعد الأمان لا تعني تشفيرًا من الطرف إلى الطرف (E2EE)، كما أن حذف الرسالة يقتصر على إخفائها من حساب المستخدم الحالي وفق سياسة صريحة.',
-  },
-];
-
-const SETUP_STEPS = [
-  {
-    step: '01',
-    title: 'إنشاء مشروع Firebase وتفعيل Google Sign-In',
-    items: [
-      'افتح Firebase Console وأنشئ مشروعًا جديدًا باسم Tawasul.',
-      'من قسم Authentication > Sign-in method فعّل مزود Google.',
-      'أضف تطبيق Android بحزمة com.tawasul.app مع بصمات SHA-1 وSHA-256 الخاصة بجهاز التطوير.',
-      'حمّل ملف google-services.json وضعه داخل المسار android/app/google-services.json.',
-    ],
-  },
-  {
-    step: '02',
-    title: 'ضبط Credential Manager و Web Client ID',
-    items: [
-      'انسخ Web Client ID (من نوع client_type: 3 داخل google-services.json أو من إعدادات مزود Google في Firebase).',
-      'أنشئ ملف android/local.properties وأضف السطر: GOOGLE_WEB_CLIENT_ID=YOUR_CLIENT_ID.apps.googleusercontent.com.',
-    ],
-  },
-  {
-    step: '03',
-    title: 'تفعيل Firestore و Storage ونشر قواعد الأمان',
-    items: [
-      'فعّل Cloud Firestore و Firebase Storage في وحدة تحكم Firebase.',
-      'من مجلد android/ نفّذ: firebase deploy --only firestore:rules,firestore:indexes,storage.',
-      'انشر دالة الإشعارات السحابية داخل android/functions عبر: firebase deploy --only functions (يتطلب خطة Blaze في Firebase).',
-    ],
-  },
-  {
-    step: '04',
-    title: 'بناء APK عبر الخدمة السحابية أو محليًا وتثبيته على هاتفك',
-    items: [
-      'للبناء السحابي بدون حاسوب قوي: ارفع كامل المشروع إلى مستودع GitHub (Tawasul) وأضف ملف google-services.json المشفّر بـ Base64 في Secret باسم GOOGLE_SERVICES_JSON_BASE64، ثم شغّل workflow (.github/workflows/android-build.yml) لتنزيل tawasul-debug-apk مباشرة إلى هاتفك.',
-      'للبناء المحلي: افتح مجلد android/ في Android Studio مع JDK 17 وAndroid SDK 35، أو نفّذ gradle assembleDebug (أو assembleRelease بعد ضبط التوقيع).',
-      'لتثبيت الـ APK على هاتفك مباشرة: نزّل ملف app-debug.apk على الهاتف وافتحه واسمح بـ "تثبيت التطبيقات من مصادر غير معروفة" للمتصفح/مدير الملفات، أو عبر USB: adb install app/build/outputs/apk/debug/app-debug.apk.',
-    ],
-  },
-];
+  url?: string;
+  size?: 'sm' | 'md' | 'lg';
+  isOnline?: boolean;
+}> = ({ name, url, size = 'md', isOnline }) => {
+  const dim =
+    size === 'sm' ? 'w-9 h-9 text-sm' : size === 'lg' ? 'w-16 h-16 text-xl' : 'w-11 h-11 text-base';
+  return (
+    <div className={`relative shrink-0 ${dim}`}>
+      {url ? (
+        <img
+          src={url}
+          alt={name}
+          referrerPolicy="no-referrer"
+          className="w-full h-full rounded-full object-cover bg-emerald-100 dark:bg-emerald-900"
+        />
+      ) : (
+        <div className="w-full h-full rounded-full bg-emerald-100 dark:bg-emerald-900/60 text-emerald-900 dark:text-emerald-200 font-bold flex items-center justify-center">
+          {(name || 'ت').trim().charAt(0).toUpperCase()}
+        </div>
+      )}
+      {isOnline && (
+        <span
+          aria-label="متصل الآن"
+          className="absolute bottom-0 left-0 w-3 h-3 rounded-full bg-emerald-500 ring-2 ring-white dark:ring-slate-900"
+        />
+      )}
+    </div>
+  );
+};
 
 export default function App() {
-  const [darkMode, setDarkMode] = useState(false);
-  const [activeTab, setActiveTab] = useState<StudioTab>('explorer');
-  const [fileQuery, setFileQuery] = useState('');
-  const [copiedPath, setCopiedPath] = useState<string | null>(null);
-  const [mobileScreen, setMobileScreen] = useState<MobileScreenKey>('chats');
-  const [previewDark, setPreviewDark] = useState(false);
+  const isOnline = useOnlineStatus();
+  const [darkMode, setDarkMode] = useState(() => localStorage.getItem('tawasul_theme') === 'dark');
+  const [authReady, setAuthReady] = useState(false);
+  const [firebaseUser, setFirebaseUser] = useState<FirebaseUser | null>(null);
+  const [profile, setProfile] = useState<UserPublicProfile | null>(null);
+  const [profileChecked, setProfileChecked] = useState(false);
+  const [authBusy, setAuthBusy] = useState(false);
+  const [authError, setAuthError] = useState<string | null>(null);
 
-  const files = useMemo<AndroidFileEntry[]>(() => {
-    return Object.entries(androidFileModules)
-      .map(([rawPath, content]) => {
-        const cleanPath = rawPath.replace(/^\//, '');
-        const name = cleanPath.split('/').pop() || cleanPath;
-        return {
-          path: cleanPath,
-          name,
-          layer: classifyLayer(cleanPath),
-          content,
-          lines: content.split('\n').length,
-        };
-      })
-      .sort((a, b) => a.path.localeCompare(b.path));
+  // Onboarding state
+  const [setupDisplayName, setSetupDisplayName] = useState('');
+  const [setupUsername, setSetupUsername] = useState('');
+  const [setupBio, setSetupBio] = useState('');
+  const [usernameHint, setUsernameHint] = useState<string | null>(null);
+  const [usernameValid, setUsernameValid] = useState(false);
+
+  // Main hub state
+  const [activeTab, setActiveTab] = useState<MainTab>('chats');
+  const [chats, setChats] = useState<Chat[]>([]);
+  const [peerProfiles, setPeerProfiles] = useState<Record<string, UserPublicProfile>>({});
+  const [blockedUsers, setBlockedUsers] = useState<BlockedUser[]>([]);
+  const [statuses, setStatuses] = useState<StatusItem[]>([]);
+  const [callHistory, setCallHistory] = useState<CallSession[]>([]);
+  const [incomingCall, setIncomingCall] = useState<CallSession | null>(null);
+  const [activeCall, setActiveCall] = useState<{
+    peer?: UserPublicProfile | null;
+    incoming?: CallSession | null;
+    type: CallType;
+  } | null>(null);
+
+  // Active Chat state
+  const [selectedChat, setSelectedChat] = useState<Chat | null>(null);
+  const [messages, setMessages] = useState<Message[]>([]);
+  const [olderMessages, setOlderMessages] = useState<Message[]>([]);
+  const [pendingMessages, setPendingMessages] = useState<Message[]>([]);
+  const [oldestCursor, setOldestCursor] = useState<QueryDocumentSnapshot | null>(null);
+  const [loadingOlder, setLoadingOlder] = useState(false);
+  const [hasMoreOlder, setHasMoreOlder] = useState(true);
+  const [draftText, setDraftText] = useState('');
+  const [isRecordingAudio, setIsRecordingAudio] = useState(false);
+  const [deleteTargetMsg, setDeleteTargetMsg] = useState<Message | null>(null);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
+
+  // Search & Groups & Status & Profile UI state
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchResults, setSearchResults] = useState<UserPublicProfile[]>([]);
+  const [isSearching, setIsSearching] = useState(false);
+  const [groupTitle, setGroupTitle] = useState('');
+  const [groupMemberQuery, setGroupMemberQuery] = useState('');
+  const [groupCandidates, setGroupCandidates] = useState<UserPublicProfile[]>([]);
+  const [selectedGroupUids, setSelectedGroupUids] = useState<string[]>([]);
+  const [statusText, setStatusText] = useState('');
+  const [activeStatusPreview, setActiveStatusPreview] = useState<StatusItem | null>(null);
+
+  // Profile edit state
+  const [editName, setEditName] = useState('');
+  const [editUsername, setEditUsername] = useState('');
+  const [editBio, setEditBio] = useState('');
+  const [toastMsg, setToastMsg] = useState<string | null>(null);
+  const [showAndroidModal, setShowAndroidModal] = useState(false);
+  const [confirmDeleteAccount, setConfirmDeleteAccount] = useState(false);
+
+  const imageInputRef = useRef<HTMLInputElement | null>(null);
+  const statusImageInputRef = useRef<HTMLInputElement | null>(null);
+  const avatarInputRef = useRef<HTMLInputElement | null>(null);
+
+  const showToast = (msg: string) => {
+    setToastMsg(msg);
+    setTimeout(() => setToastMsg(null), 3200);
+  };
+
+  useEffect(() => {
+    localStorage.setItem('tawasul_theme', darkMode ? 'dark' : 'light');
+  }, [darkMode]);
+
+  // Auth listener
+  useEffect(() => {
+    return onAuthStateChanged(auth, async (user) => {
+      setFirebaseUser(user);
+      setAuthReady(true);
+      if (!user) {
+        setProfile(null);
+        setProfileChecked(true);
+        setSelectedChat(null);
+        return;
+      }
+      setSetupDisplayName(user.displayName || '');
+      const existing = await getUserProfile(user.uid);
+      setProfile(existing);
+      setProfileChecked(true);
+      if (existing?.profileCompleted) {
+        updatePresence(user.uid, true);
+      }
+    });
   }, []);
 
-  const [selectedPath, setSelectedPath] = useState<string>(() => {
-    const preferred = 'android/app/src/main/java/com/tawasul/app/repositories/UserRepository.kt';
-    return files.find((f) => f.path === preferred)?.path || files[0]?.path || '';
-  });
+  // Subscriptions when authenticated and profile completed
+  const blockedUidSet = useMemo(
+    () => new Set(blockedUsers.map((b) => b.blockedUid)),
+    [blockedUsers]
+  );
 
-  const filteredFiles = useMemo(() => {
-    const q = fileQuery.trim().toLowerCase();
-    if (!q) return files;
-    return files.filter(
-      (f) => f.path.toLowerCase().includes(q) || f.layer.toLowerCase().includes(q)
-    );
-  }, [files, fileQuery]);
-
-  const groupedFiles = useMemo(() => {
-    const map = new Map<string, AndroidFileEntry[]>();
-    LAYER_ORDER.forEach((l) => map.set(l, []));
-    filteredFiles.forEach((f) => {
-      const list = map.get(f.layer) || [];
-      list.push(f);
-      map.set(f.layer, list);
+  useEffect(() => {
+    if (!firebaseUser || !profile?.profileCompleted) return;
+    const uid = firebaseUser.uid;
+    const unsubProfile = subscribeUserProfile(uid, (p) => {
+      if (p) {
+        setProfile(p);
+        setEditName(p.displayName);
+        setEditUsername(p.username);
+        setEditBio(p.bio);
+      }
     });
-    return Array.from(map.entries()).filter(([, list]) => list.length > 0);
-  }, [filteredFiles]);
+    const unsubBlocked = subscribeBlockedUsers(uid, setBlockedUsers);
+    const unsubChats = subscribeUserChats(uid, setChats);
+    const unsubIncoming = subscribeIncomingCall(uid, setIncomingCall);
+    const unsubCalls = subscribeCallHistory(uid, setCallHistory);
 
-  const selectedFile = useMemo(
-    () => files.find((f) => f.path === selectedPath) || files[0],
-    [files, selectedPath]
-  );
+    const handleVisibility = () => {
+      updatePresence(uid, document.visibilityState === 'visible');
+    };
+    document.addEventListener('visibilitychange', handleVisibility);
 
-  const totalLines = useMemo(
-    () => files.reduce((acc, item) => acc + item.lines, 0),
-    [files]
-  );
+    return () => {
+      unsubProfile();
+      unsubBlocked();
+      unsubChats();
+      unsubIncoming();
+      unsubCalls();
+      document.removeEventListener('visibilitychange', handleVisibility);
+    };
+  }, [firebaseUser, profile?.profileCompleted]);
 
-  const handleCopy = async (path: string, content: string) => {
+  useEffect(() => {
+    if (!firebaseUser || !profile?.profileCompleted) return;
+    return subscribeActiveStatuses(blockedUidSet, setStatuses);
+  }, [firebaseUser, profile?.profileCompleted, blockedUidSet]);
+
+  // Fetch missing peer profiles for direct chats
+  useEffect(() => {
+    if (!firebaseUser) return;
+    const missing = new Set<string>();
+    chats.forEach((c) => {
+      if (c.type === 'DIRECT') {
+        c.participantIds.forEach((id) => {
+          if (id !== firebaseUser.uid && !peerProfiles[id]) missing.add(id);
+        });
+      }
+    });
+    missing.forEach(async (peerUid) => {
+      const p = await getUserProfile(peerUid);
+      if (p) {
+        setPeerProfiles((prev) => ({ ...prev, [peerUid]: p }));
+      }
+    });
+  }, [chats, firebaseUser, peerProfiles]);
+
+  // Active chat messages subscription
+  useEffect(() => {
+    if (!selectedChat || !firebaseUser) return;
+    setOlderMessages([]);
+    setPendingMessages([]);
+    setOldestCursor(null);
+    setHasMoreOlder(true);
+
+    return subscribeLatestMessages(selectedChat.id, (latest, oldestDoc) => {
+      setMessages(latest);
+      setOldestCursor((prev) => prev || oldestDoc);
+      markChatAsRead(
+        selectedChat.id,
+        firebaseUser.uid,
+        profile?.showReadReceipts ?? true,
+        latest
+      );
+    });
+  }, [selectedChat?.id, firebaseUser?.uid]);
+
+  const handleGoogleLogin = async () => {
+    setAuthBusy(true);
+    setAuthError(null);
     try {
-      await navigator.clipboard.writeText(content);
-      setCopiedPath(path);
-      setTimeout(() => setCopiedPath(null), 1800);
-    } catch {
-      // Clipboard API fallback ignored if restricted
+      await signInWithGooglePopup();
+    } catch (err) {
+      setAuthError(err instanceof Error ? err.message : 'تعذر تسجيل الدخول عبر Google.');
+    } finally {
+      setAuthBusy(false);
     }
   };
 
-  return (
-    <div className={darkMode ? 'dark' : ''}>
-      <div className="min-h-screen bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 transition-colors">
-        {/* Top Bar Contract: 3 zones */}
-        <header className="sticky top-0 z-30 bg-white/95 dark:bg-slate-900/95 backdrop-blur-md border-b border-slate-200 dark:border-slate-800">
-          <div className="max-w-7xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between gap-8">
-            <a
-              href="#top"
-              onClick={(e) => {
-                e.preventDefault();
-                setActiveTab('explorer');
-              }}
-              className="text-xl font-bold tracking-tight text-emerald-800 dark:text-emerald-400 whitespace-nowrap shrink-0 font-display"
-            >
+  const handleUsernameCheck = async (val: string) => {
+    setSetupUsername(val);
+    if (!val.trim()) {
+      setUsernameHint(null);
+      setUsernameValid(false);
+      return;
+    }
+    const res = await isUsernameAvailable(val);
+    setUsernameValid(res.available);
+    setUsernameHint(res.hint);
+  };
+
+  const handleCompleteOnboarding = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!firebaseUser) return;
+    setAuthBusy(true);
+    setAuthError(null);
+    try {
+      await completeProfileSetup({
+        uid: firebaseUser.uid,
+        email: firebaseUser.email || '',
+        displayName: setupDisplayName,
+        rawUsername: setupUsername,
+        bio: setupBio,
+        avatarUrl: firebaseUser.photoURL || '',
+      });
+      const saved = await getUserProfile(firebaseUser.uid);
+      setProfile(saved);
+    } catch (err) {
+      setAuthError(err instanceof Error ? err.message : 'تعذر حفظ الملف الشخصي.');
+    } finally {
+      setAuthBusy(false);
+    }
+  };
+
+  const handleSearch = async (val: string) => {
+    setSearchQuery(val);
+    if (!firebaseUser || !val.trim()) {
+      setSearchResults([]);
+      return;
+    }
+    setIsSearching(true);
+    try {
+      const results = await searchUsersByUsername(val, firebaseUser.uid, blockedUidSet);
+      setSearchResults(results);
+    } finally {
+      setIsSearching(false);
+    }
+  };
+
+  const handleOpenDirectChatWith = async (target: UserPublicProfile) => {
+    if (!firebaseUser) return;
+    setPeerProfiles((prev) => ({ ...prev, [target.uid]: target }));
+    const chat = await getOrCreateDirectChat(firebaseUser.uid, target.uid);
+    setSelectedChat(chat);
+    setActiveTab('chats');
+  };
+
+  const dispatchMessage = async (msgDraft: Message) => {
+    if (!selectedChat) return;
+    if (!isOnline) {
+      setPendingMessages((prev) =>
+        prev.map((m) =>
+          m.localClientId === msgDraft.localClientId ? { ...m, deliveryStatus: 'FAILED' } : m
+        )
+      );
+      showToast('لا يوجد اتصال بالإنترنت. اضغط على الرسالة لإعادة المحاولة.');
+      return;
+    }
+
+    try {
+      await sendMessage({
+        chatId: selectedChat.id,
+        senderId: msgDraft.senderId,
+        participantIds: selectedChat.participantIds,
+        type: msgDraft.type,
+        text: msgDraft.text,
+        mediaUrl: msgDraft.mediaUrl,
+        mediaDurationSec: msgDraft.mediaDurationSec,
+        localClientId: msgDraft.localClientId,
+      });
+      setPendingMessages((prev) =>
+        prev.filter((m) => m.localClientId !== msgDraft.localClientId)
+      );
+    } catch {
+      setPendingMessages((prev) =>
+        prev.map((m) =>
+          m.localClientId === msgDraft.localClientId ? { ...m, deliveryStatus: 'FAILED' } : m
+        )
+      );
+    }
+  };
+
+  const handleSendText = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!firebaseUser || !selectedChat || !draftText.trim()) return;
+    const localId = crypto.randomUUID();
+    const optimistic: Message = {
+      id: `local_${localId}`,
+      chatId: selectedChat.id,
+      senderId: firebaseUser.uid,
+      type: 'TEXT',
+      text: draftText.trim(),
+      mediaUrl: '',
+      mediaDurationSec: 0,
+      deliveryStatus: 'SENDING',
+      readBy: {},
+      deletedForUids: [],
+      localClientId: localId,
+      createdAt: null,
+    };
+    setDraftText('');
+    setPendingMessages((prev) => [...prev, optimistic]);
+    await dispatchMessage(optimistic);
+  };
+
+  const handleRetryFailed = async (failed: Message) => {
+    const retrying: Message = { ...failed, deliveryStatus: 'SENDING' };
+    setPendingMessages((prev) =>
+      prev.map((m) => (m.localClientId === failed.localClientId ? retrying : m))
+    );
+    await dispatchMessage(retrying);
+  };
+
+  const handleChatImageSelected = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file || !firebaseUser || !selectedChat) return;
+    try {
+      const dataUrl = await compressImageFileToDataUrl(file, 720);
+      const localId = crypto.randomUUID();
+      await sendMessage({
+        chatId: selectedChat.id,
+        senderId: firebaseUser.uid,
+        participantIds: selectedChat.participantIds,
+        type: 'IMAGE',
+        mediaUrl: dataUrl,
+        localClientId: localId,
+      });
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : 'تعذر إرسال الصورة.');
+    }
+  };
+
+  const handleToggleVoiceRecord = async () => {
+    if (!firebaseUser || !selectedChat) return;
+    if (isRecordingAudio && mediaRecorderRef.current) {
+      mediaRecorderRef.current.stop();
+      setIsRecordingAudio(false);
+      return;
+    }
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const recorder = new MediaRecorder(stream);
+      audioChunksRef.current = [];
+      const startedAt = Date.now();
+
+      recorder.ondataavailable = (ev) => {
+        if (ev.data.size > 0) audioChunksRef.current.push(ev.data);
+      };
+      recorder.onstop = async () => {
+        stream.getTracks().forEach((t) => t.stop());
+        const blob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
+        const durationSec = Math.max(1, Math.round((Date.now() - startedAt) / 1000));
+        if (blob.size > 650_000) {
+          showToast('الرسالة الصوتية طويلة جدًا، يرجى تسجيل رسالة أقصر.');
+          return;
+        }
+        const reader = new FileReader();
+        reader.onloadend = async () => {
+          const base64 = typeof reader.result === 'string' ? reader.result : '';
+          if (!base64) return;
+          await sendMessage({
+            chatId: selectedChat.id,
+            senderId: firebaseUser.uid,
+            participantIds: selectedChat.participantIds,
+            type: 'AUDIO',
+            mediaUrl: base64,
+            mediaDurationSec: durationSec,
+            localClientId: crypto.randomUUID(),
+          });
+        };
+        reader.readAsDataURL(blob);
+      };
+
+      mediaRecorderRef.current = recorder;
+      recorder.start();
+      setIsRecordingAudio(true);
+    } catch {
+      showToast('تعذر الوصول إلى الميكروفون.');
+    }
+  };
+
+  const handleLoadOlder = async () => {
+    if (!selectedChat || !oldestCursor || loadingOlder) return;
+    setLoadingOlder(true);
+    try {
+      const res = await loadOlderMessages(selectedChat.id, oldestCursor);
+      setOlderMessages((prev) => [...res.messages, ...prev]);
+      setOldestCursor(res.nextOldest);
+      if (res.messages.length === 0) setHasMoreOlder(false);
+    } finally {
+      setLoadingOlder(false);
+    }
+  };
+
+  const combinedMessages = useMemo(() => {
+    if (!firebaseUser) return [];
+    const map = new Map<string, Message>();
+    [...olderMessages, ...messages, ...pendingMessages].forEach((m) => {
+      if (!m.deletedForUids?.includes(firebaseUser.uid)) {
+        map.set(m.id, m);
+      }
+    });
+    return Array.from(map.values());
+  }, [olderMessages, messages, pendingMessages, firebaseUser]);
+
+  const wrapperClass = darkMode ? 'dark' : '';
+
+  if (!authReady || (firebaseUser && !profileChecked)) {
+    return (
+      <div className={wrapperClass}>
+        <div className="min-h-screen flex items-center justify-center bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100">
+          <div className="text-center space-y-3">
+            <div className="w-12 h-12 mx-auto rounded-2xl bg-emerald-800 text-white flex items-center justify-center font-bold text-xl">
+              ت
+            </div>
+            <p className="text-sm text-slate-500">جاري تحميل تواصل...</p>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Screen 1: Welcome / Google Sign-In
+  if (!firebaseUser) {
+    return (
+      <div className={wrapperClass}>
+        <div className="min-h-screen flex flex-col justify-between bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 p-6">
+          <div className="max-w-md w-full mx-auto flex items-center justify-between">
+            <span className="text-lg font-bold text-emerald-800 dark:text-emerald-400 font-display">
               تواصل
-            </a>
-
-            <nav className="hidden md:flex items-center gap-6 text-sm font-medium">
+            </span>
+            <div className="flex items-center gap-2">
               <button
                 type="button"
-                onClick={() => setActiveTab('explorer')}
-                className={`py-1 whitespace-nowrap shrink-0 transition-colors border-b-2 ${
-                  activeTab === 'explorer'
-                    ? 'border-emerald-700 text-emerald-800 dark:text-emerald-400 dark:border-emerald-400'
-                    : 'border-transparent text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100'
-                }`}
-              >
-                ملفات المشروع
-              </button>
-              <button
-                type="button"
-                onClick={() => setActiveTab('preview')}
-                className={`py-1 whitespace-nowrap shrink-0 transition-colors border-b-2 ${
-                  activeTab === 'preview'
-                    ? 'border-emerald-700 text-emerald-800 dark:text-emerald-400 dark:border-emerald-400'
-                    : 'border-transparent text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100'
-                }`}
-              >
-                معاينة الواجهات
-              </button>
-              <button
-                type="button"
-                onClick={() => setActiveTab('security')}
-                className={`py-1 whitespace-nowrap shrink-0 transition-colors border-b-2 ${
-                  activeTab === 'security'
-                    ? 'border-emerald-700 text-emerald-800 dark:text-emerald-400 dark:border-emerald-400'
-                    : 'border-transparent text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100'
-                }`}
-              >
-                الأمان وقواعد Firestore
-              </button>
-              <button
-                type="button"
-                onClick={() => setActiveTab('setup')}
-                className={`py-1 whitespace-nowrap shrink-0 transition-colors border-b-2 ${
-                  activeTab === 'setup'
-                    ? 'border-emerald-700 text-emerald-800 dark:text-emerald-400 dark:border-emerald-400'
-                    : 'border-transparent text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100'
-                }`}
-              >
-                خطوات الربط وAPK
-              </button>
-            </nav>
-
-            <div className="flex items-center gap-3 shrink-0">
-              <button
-                type="button"
-                onClick={() => setDarkMode((prev) => !prev)}
-                className="inline-flex items-center gap-2 px-4 py-2 text-xs font-medium rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors whitespace-nowrap shrink-0 min-h-[40px]"
+                onClick={() => setDarkMode((p) => !p)}
+                className="p-2.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900"
+                aria-label="تبديل المظهر"
               >
                 {darkMode ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
-                <span>{darkMode ? 'الوضع الفاتح' : 'الوضع الداكن'}</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowAndroidModal(true)}
+                className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900"
+              >
+                <Code2 className="w-4 h-4" />
+                <span>كود Android</span>
               </button>
             </div>
           </div>
 
-          {/* Mobile navigation row */}
-          <div className="md:hidden border-t border-slate-200 dark:border-slate-800 px-3 py-2 flex items-center gap-2 overflow-x-auto">
+          <div className="max-w-md w-full mx-auto text-center space-y-5 my-auto">
+            <div className="w-20 h-20 mx-auto rounded-3xl bg-emerald-800 text-white flex items-center justify-center shadow-lg">
+              <MessageSquare className="w-10 h-10" />
+            </div>
+            <h1 className="text-3xl font-bold font-display">مرحبًا بك في تواصل</h1>
+            <p className="text-sm text-slate-600 dark:text-slate-300 leading-relaxed">
+              تطبيق مراسلة فورية ومكالمات صوتية ومرئية عبر اسم المستخدم الفريد، دون الحاجة لمشاركة رقم هاتفك أو بريدك الإلكتروني.
+            </p>
+
+            {authError && (
+              <div className="p-3 rounded-xl bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-900 text-xs text-red-700 dark:text-red-300">
+                {authError}
+              </div>
+            )}
+
+            <div className="space-y-3 pt-2">
+              <button
+                type="button"
+                onClick={handleGoogleLogin}
+                disabled={authBusy}
+                className="w-full py-3.5 px-5 rounded-2xl bg-emerald-800 hover:bg-emerald-700 text-white font-semibold text-sm transition-colors min-h-[48px] disabled:opacity-60"
+              >
+                {authBusy ? 'جاري تسجيل الدخول...' : 'المتابعة باستخدام Google'}
+              </button>
+
+              <PWAInstallButton variant="primary" />
+            </div>
+
+            <p className="text-xs text-slate-500 dark:text-slate-400 leading-relaxed">
+              يعتمد التطبيق على Firebase Authentication وقواعد Firestore الآمنة لحماية الوصول، ولا يوفّر تشفيرًا من الطرف إلى الطرف (E2EE) افتراضيًا.
+            </p>
+          </div>
+
+          <div className="text-center text-xs text-slate-400">تواصل · تطبيق مراسلة عربية</div>
+        </div>
+        {showAndroidModal && <AndroidProjectModal onClose={() => setShowAndroidModal(false)} />}
+      </div>
+    );
+  }
+
+  // Screen 2: Profile Setup for new users
+  if (!profile?.profileCompleted) {
+    return (
+      <div className={wrapperClass}>
+        <div className="min-h-screen flex items-center justify-center bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 p-6">
+          <form
+            onSubmit={handleCompleteOnboarding}
+            className="max-w-md w-full bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl p-6 space-y-4"
+          >
+            <div className="flex flex-col items-center text-center space-y-2">
+              <Avatar name={setupDisplayName || 'ت'} url={firebaseUser.photoURL || ''} size="lg" />
+              <h1 className="text-xl font-bold font-display">إعداد ملفك الشخصي</h1>
+              <p className="text-xs text-slate-500 dark:text-slate-400">
+                اختر اسمًا ظاهرًا واسم مستخدم فريدًا ليعثر عليك الآخرون دون كشف بريدك الإلكتروني.
+              </p>
+            </div>
+
+            <div className="space-y-1.5">
+              <label className="text-xs font-medium">الاسم الظاهر</label>
+              <input
+                type="text"
+                required
+                minLength={2}
+                maxLength={50}
+                value={setupDisplayName}
+                onChange={(e) => setSetupDisplayName(e.target.value)}
+                className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-sm"
+              />
+            </div>
+
+            <div className="space-y-1.5">
+              <label className="text-xs font-medium">اسم المستخدم الفريد (3-20 حرفًا إنجليزيًا)</label>
+              <div className="relative">
+                <input
+                  type="text"
+                  required
+                  dir="ltr"
+                  value={setupUsername}
+                  onChange={(e) => handleUsernameCheck(e.target.value)}
+                  placeholder="ahmad_99"
+                  className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-sm font-mono"
+                />
+              </div>
+              {usernameHint && (
+                <p
+                  className={`text-xs ${
+                    usernameValid ? 'text-emerald-700 dark:text-emerald-400' : 'text-red-600 dark:text-red-400'
+                  }`}
+                >
+                  {usernameHint}
+                </p>
+              )}
+            </div>
+
+            <div className="space-y-1.5">
+              <label className="text-xs font-medium">نبذة شخصية (اختياري)</label>
+              <textarea
+                maxLength={MAX_BIO_LENGTH}
+                value={setupBio}
+                onChange={(e) => setSetupBio(e.target.value)}
+                rows={2}
+                className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-sm"
+              />
+            </div>
+
+            {authError && (
+              <p className="text-xs text-red-600 dark:text-red-400">{authError}</p>
+            )}
+
+            <button
+              type="submit"
+              disabled={authBusy || !usernameValid || setupDisplayName.trim().length < 2}
+              className="w-full py-3 rounded-xl bg-emerald-800 hover:bg-emerald-700 text-white text-sm font-semibold transition-colors disabled:opacity-50 min-h-[44px]"
+            >
+              {authBusy ? 'جاري الإنشاء...' : 'إنشاء الحساب والبدء'}
+            </button>
+          </form>
+        </div>
+      </div>
+    );
+  }
+
+  const activePeerUid =
+    selectedChat?.type === 'DIRECT'
+      ? selectedChat.participantIds.find((id) => id !== firebaseUser.uid)
+      : undefined;
+  const activePeer = activePeerUid ? peerProfiles[activePeerUid] : undefined;
+
+  return (
+    <div className={wrapperClass}>
+      <div className="h-screen flex flex-col bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 overflow-hidden">
+        {/* Top Bar Contract (3 zones) */}
+        <header className="h-14 shrink-0 bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 px-4 flex items-center justify-between gap-6">
+          <span className="text-lg font-bold text-emerald-800 dark:text-emerald-400 font-display whitespace-nowrap shrink-0">
+            تواصل
+          </span>
+
+          <nav className="hidden md:flex items-center gap-5 text-sm font-medium">
             {(
               [
-                ['explorer', 'ملفات المشروع'],
-                ['preview', 'الواجهات'],
-                ['security', 'الأمان'],
-                ['setup', 'البناء وAPK'],
+                ['chats', 'المحادثات'],
+                ['search', 'البحث'],
+                ['status', 'الحالات'],
+                ['groups', 'المجموعات'],
+                ['calls', 'المكالمات'],
+                ['profile', 'حسابي'],
               ] as const
             ).map(([key, label]) => (
               <button
                 key={key}
                 type="button"
-                onClick={() => setActiveTab(key)}
-                className={`px-3 py-2 text-xs font-medium rounded-lg whitespace-nowrap shrink-0 min-h-[40px] ${
+                onClick={() => {
+                  setActiveTab(key);
+                  if (key !== 'chats') setSelectedChat(null);
+                }}
+                className={`py-1 whitespace-nowrap shrink-0 border-b-2 transition-colors ${
                   activeTab === key
-                    ? 'bg-emerald-800 text-white'
-                    : 'text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800'
+                    ? 'border-emerald-700 text-emerald-800 dark:text-emerald-400 dark:border-emerald-400'
+                    : 'border-transparent text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100'
                 }`}
               >
                 {label}
               </button>
             ))}
+          </nav>
+
+          <div className="flex items-center gap-2 shrink-0">
+            <PWAInstallButton variant="compact" />
           </div>
         </header>
 
-        <main className="max-w-7xl mx-auto px-4 sm:px-6 py-8">
-          {/* Summary Header */}
-          <section className="mb-8 pb-6 border-b border-slate-200 dark:border-slate-800">
-            <h1 className="text-2xl sm:text-3xl font-bold text-slate-900 dark:text-slate-50 font-display">
-              مشروع تواصل لنظام Android — Kotlin وJetpack Compose وFirebase
-            </h1>
-            <p className="mt-2 text-sm sm:text-base text-slate-600 dark:text-slate-300 max-w-3xl leading-relaxed">
-              بنية مشروع Android متكاملة وقابلة للبناء داخل مجلد{' '}
-              <code className="px-1.5 py-0.5 rounded bg-slate-200/70 dark:bg-slate-800 text-xs font-mono">
-                android/
-              </code>{' '}
-              تشمل تسجيل الدخول عبر Google (Credential Manager)، وحجز اسم المستخدم الفريد ذريًا، والمحادثات الثنائية والجماعية، والوسائط والرسائل الصوتية، والحالات (24 ساعة)، ومكالمات WebRTC، وقواعد أمان Firestore وStorage، ودالة Cloud Function لإشعارات FCM.
-            </p>
-            <div className="mt-4 flex flex-wrap items-center gap-3 text-xs text-slate-500 dark:text-slate-400 tabular-nums">
-              <span>{files.length} ملفًا مصدريًا</span>
-              <span aria-hidden="true">·</span>
-              <span>{totalLines.toLocaleString('en-US')} سطرًا برمجيًا</span>
-              <span aria-hidden="true">·</span>
-              <span>Package: com.tawasul.app</span>
-              <span aria-hidden="true">·</span>
-              <span>Compile SDK 35 · Min SDK 26</span>
+        {!isOnline && (
+          <div className="bg-red-50 dark:bg-red-950/60 border-b border-red-200 dark:border-red-900 px-4 py-2 text-xs text-red-700 dark:text-red-300 flex items-center gap-2">
+            <WifiOff className="w-4 h-4 shrink-0" />
+            <span>لا يوجد اتصال بالإنترنت — قد يتعذر إرسال الرسائل الجديدة حتى عودة الشبكة.</span>
+          </div>
+        )}
+
+        {toastMsg && (
+          <div className="fixed top-16 left-1/2 -translate-x-1/2 z-50 bg-slate-900 text-white dark:bg-slate-100 dark:text-slate-900 px-4 py-2 rounded-xl text-xs font-medium shadow-lg">
+            {toastMsg}
+          </div>
+        )}
+
+        {/* Incoming Call Banner */}
+        {incomingCall && !activeCall && (
+          <div className="bg-emerald-900 text-white px-4 py-3 flex items-center justify-between gap-4">
+            <div className="text-sm font-medium">
+              مكالمة {incomingCall.type === 'VIDEO' ? 'مرئية' : 'صوتية'} واردة من{' '}
+              <strong>{incomingCall.callerName}</strong>
             </div>
-          </section>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => updateCallStatus(incomingCall.id, 'DECLINED')}
+                className="px-3 py-1.5 rounded-lg bg-red-600 text-xs font-semibold"
+              >
+                رفض
+              </button>
+              <button
+                type="button"
+                onClick={() =>
+                  setActiveCall({
+                    incoming: incomingCall,
+                    type: incomingCall.type,
+                  })
+                }
+                className="px-3 py-1.5 rounded-lg bg-emerald-500 text-slate-950 text-xs font-semibold"
+              >
+                رد
+              </button>
+            </div>
+          </div>
+        )}
 
-          {activeTab === 'explorer' && (
-            <section className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-              {/* File Tree Sidebar */}
-              <aside className="lg:col-span-4 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl overflow-hidden">
-                <div className="p-4 border-b border-slate-200 dark:border-slate-800">
-                  <div className="relative">
-                    <Search className="w-4 h-4 text-slate-400 absolute right-3 top-1/2 -translate-y-1/2" />
-                    <input
-                      type="text"
-                      value={fileQuery}
-                      onChange={(e) => setFileQuery(e.target.value)}
-                      placeholder="ابحث عن ملف أو طبقة..."
-                      className="w-full pr-9 pl-3 py-2 text-sm rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-emerald-700"
-                    />
-                  </div>
-                </div>
-
-                <div className="max-h-[640px] overflow-y-auto divide-y divide-slate-100 dark:divide-slate-800">
-                  {groupedFiles.map(([layer, items]) => (
-                    <div key={layer} className="p-3">
-                      <div className="flex items-center justify-between px-2 py-1 text-xs font-semibold text-emerald-800 dark:text-emerald-400">
-                        <span className="flex items-center gap-1.5">
-                          <FolderOpen className="w-3.5 h-3.5" />
-                          {layer}
-                        </span>
-                        <span className="tabular-nums text-slate-400">{items.length}</span>
-                      </div>
-                      <ul className="mt-1 space-y-0.5">
-                        {items.map((item) => {
-                          const isSelected = selectedFile?.path === item.path;
-                          return (
-                            <li key={item.path}>
-                              <button
-                                type="button"
-                                onClick={() => setSelectedPath(item.path)}
-                                className={`w-full text-right px-2.5 py-2 rounded-lg text-xs flex items-center justify-between gap-2 transition-colors min-h-[38px] ${
-                                  isSelected
-                                    ? 'bg-emerald-800 text-white'
-                                    : 'text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800'
-                                }`}
-                              >
-                                <span className="flex items-center gap-2 min-w-0">
-                                  <FileCode2 className="w-3.5 h-3.5 shrink-0" />
-                                  <span className="truncate font-mono" dir="ltr">
-                                    {item.name}
-                                  </span>
-                                </span>
-                                <span
-                                  className={`text-[11px] tabular-nums shrink-0 ${
-                                    isSelected ? 'text-emerald-100' : 'text-slate-400'
-                                  }`}
-                                >
-                                  {item.lines}
-                                </span>
-                              </button>
-                            </li>
-                          );
-                        })}
-                      </ul>
+        {/* Main Workspace */}
+        <div className="flex-1 overflow-hidden flex max-w-7xl w-full mx-auto">
+          {/* Left/Right List Column (hidden on mobile when a chat is open) */}
+          <div
+            className={`w-full md:w-96 shrink-0 border-l border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 flex flex-col overflow-hidden ${
+              selectedChat && activeTab === 'chats' ? 'hidden md:flex' : 'flex'
+            }`}
+          >
+            {activeTab === 'chats' && (
+              <div className="flex-1 overflow-y-auto divide-y divide-slate-100 dark:divide-slate-800">
+                {chats.length === 0 ? (
+                  <div className="h-full flex flex-col items-center justify-center p-8 text-center space-y-3">
+                    <div className="w-14 h-14 rounded-full bg-emerald-100 dark:bg-emerald-900/40 text-emerald-800 dark:text-emerald-300 flex items-center justify-center">
+                      <MessageSquare className="w-6 h-6" />
                     </div>
-                  ))}
-                </div>
-              </aside>
-
-              {/* Code Viewer */}
-              <div className="lg:col-span-8 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl overflow-hidden">
-                {selectedFile ? (
-                  <>
-                    <div className="px-4 py-3 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between gap-4">
-                      <div className="min-w-0">
-                        <p className="text-xs text-slate-500 dark:text-slate-400">
-                          {selectedFile.layer}
-                        </p>
-                        <p
-                          className="text-sm font-mono font-medium text-slate-900 dark:text-slate-100 truncate"
-                          dir="ltr"
-                        >
-                          {selectedFile.path}
-                        </p>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => handleCopy(selectedFile.path, selectedFile.content)}
-                        className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors shrink-0 min-h-[40px]"
-                      >
-                        {copiedPath === selectedFile.path ? (
-                          <>
-                            <Check className="w-3.5 h-3.5 text-emerald-600" />
-                            <span>تم النسخ</span>
-                          </>
-                        ) : (
-                          <>
-                            <Copy className="w-3.5 h-3.5" />
-                            <span>نسخ الكود</span>
-                          </>
-                        )}
-                      </button>
-                    </div>
-                    <div className="max-h-[640px] overflow-auto bg-slate-950 text-slate-100 p-4 text-xs leading-6 font-mono" dir="ltr">
-                      <pre className="whitespace-pre">{selectedFile.content}</pre>
-                    </div>
-                  </>
-                ) : (
-                  <div className="p-8 text-center text-sm text-slate-500">
-                    اختر ملفًا من القائمة لعرض محتواه.
-                  </div>
-                )}
-              </div>
-            </section>
-          )}
-
-          {activeTab === 'preview' && (
-            <section className="space-y-6">
-              <div className="bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-900 rounded-2xl p-4 flex items-start gap-3">
-                <AlertTriangle className="w-5 h-5 text-amber-700 dark:text-amber-400 shrink-0 mt-0.5" />
-                <div className="text-sm text-amber-900 dark:text-amber-200">
-                  <p className="font-semibold">معاينة تصميمية لواجهات Jetpack Compose (UI Blueprint)</p>
-                  <p className="mt-1 text-xs leading-relaxed opacity-90">
-                    هذه المعاينة تستعرض بنية الشاشات والهوية البصرية لتطبيق تواصل (أخضر زمردي داكن + RTL كامل + الوضع الفاتح والداكن) ولا تحاكي مراسلة فعلية؛ يتطلب التشغيل الحقيقي ربط مشروع Firebase الخاص بك ووضع ملف google-services.json داخل مجلد android/app/.
-                  </p>
-                </div>
-              </div>
-
-              <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
-                <div className="lg:col-span-5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 space-y-4">
-                  <div className="flex items-center justify-between">
-                    <h2 className="text-lg font-bold font-display">شاشات التطبيق التفاعلية</h2>
+                    <h2 className="font-bold text-base">لا توجد محادثات بعد</h2>
+                    <p className="text-xs text-slate-500 dark:text-slate-400">
+                      انتقل إلى تبويب البحث للعثور على أصدقائك عبر اسم المستخدم وبدء المحادثة.
+                    </p>
                     <button
                       type="button"
-                      onClick={() => setPreviewDark((p) => !p)}
-                      className="px-3 py-1.5 text-xs font-medium rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800"
+                      onClick={() => setActiveTab('search')}
+                      className="px-4 py-2 rounded-xl bg-emerald-800 text-white text-xs font-medium"
                     >
-                      {previewDark ? 'مظهر الهاتف: فاتح' : 'مظهر الهاتف: داكن'}
+                      ابحث عن اسم مستخدم
                     </button>
                   </div>
+                ) : (
+                  chats.map((chat) => {
+                    const peerUid =
+                      chat.type === 'DIRECT'
+                        ? chat.participantIds.find((id) => id !== firebaseUser.uid)
+                        : undefined;
+                    const peer = peerUid ? peerProfiles[peerUid] : undefined;
+                    const name =
+                      chat.type === 'GROUP' ? chat.title : peer?.displayName || 'مستخدم';
+                    const unread = chat.unreadCounts?.[firebaseUser.uid] || 0;
+                    const isSelected = selectedChat?.id === chat.id;
 
-                  <div className="grid grid-cols-2 gap-2">
-                    {(
-                      [
-                        ['welcome', 'الترحيب (Google)'],
-                        ['onboarding', 'إعداد اسم المستخدم'],
-                        ['chats', 'المحادثات'],
-                        ['chatDetail', 'داخل المحادثة'],
-                        ['search', 'البحث وجهات الاتصال'],
-                        ['status', 'الحالات (24 ساعة)'],
-                        ['groups', 'المجموعات'],
-                        ['calls', 'المكالمات (WebRTC)'],
-                        ['profile', 'الملف والخصوصية'],
-                      ] as const
-                    ).map(([key, label]) => (
+                    return (
                       <button
-                        key={key}
+                        key={chat.id}
                         type="button"
-                        onClick={() => setMobileScreen(key)}
-                        className={`px-3 py-2.5 text-xs font-medium rounded-xl text-right transition-colors min-h-[44px] ${
-                          mobileScreen === key
-                            ? 'bg-emerald-800 text-white'
-                            : 'bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200 hover:bg-slate-200 dark:hover:bg-slate-700'
+                        onClick={() => setSelectedChat(chat)}
+                        className={`w-full text-right px-4 py-3 flex items-center gap-3 transition-colors ${
+                          isSelected
+                            ? 'bg-emerald-50 dark:bg-emerald-950/40'
+                            : 'hover:bg-slate-50 dark:hover:bg-slate-800/50'
                         }`}
                       >
-                        {label}
+                        <Avatar
+                          name={name}
+                          url={chat.type === 'GROUP' ? chat.avatarUrl : peer?.avatarUrl}
+                          isOnline={peer?.showOnlineStatus && peer?.isOnline}
+                        />
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="font-semibold text-sm truncate">{name}</span>
+                            <span className="text-[11px] text-slate-400 tabular-nums shrink-0">
+                              {formatArabicTime(chat.lastMessageAt)}
+                            </span>
+                          </div>
+                          <div className="flex items-center justify-between gap-2 mt-1">
+                            <span className="text-xs text-slate-500 dark:text-slate-400 truncate">
+                              {chat.lastMessageText || (peer ? `@${peer.username}` : '')}
+                            </span>
+                            {unread > 0 && (
+                              <span className="min-w-[20px] h-5 px-1.5 rounded-full bg-emerald-800 text-white text-[11px] font-bold flex items-center justify-center tabular-nums">
+                                {unread}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      </button>
+                    );
+                  })
+                )}
+              </div>
+            )}
+
+            {activeTab === 'search' && (
+              <div className="flex-1 flex flex-col overflow-hidden p-4 space-y-4">
+                <div className="relative">
+                  <Search className="w-4 h-4 text-slate-400 absolute right-3 top-1/2 -translate-y-1/2" />
+                  <input
+                    type="text"
+                    value={searchQuery}
+                    onChange={(e) => handleSearch(e.target.value)}
+                    placeholder="ابحث عن اسم المستخدم"
+                    className="w-full pr-9 pl-3 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-sm"
+                  />
+                </div>
+
+                <div className="flex-1 overflow-y-auto divide-y divide-slate-100 dark:divide-slate-800">
+                  {isSearching ? (
+                    <p className="text-center text-xs text-slate-500 py-8">جاري البحث...</p>
+                  ) : !searchQuery.trim() ? (
+                    <p className="text-center text-xs text-slate-500 py-10 leading-relaxed">
+                      أدخل اسم المستخدم الإنجليزي للعثور على أي شخص ومراسلتهم مباشرة دون معرفة رقم هاتفه.
+                    </p>
+                  ) : searchResults.length === 0 ? (
+                    <p className="text-center text-xs text-slate-500 py-10">
+                      لا يوجد مستخدم مطابق لهذا الاسم.
+                    </p>
+                  ) : (
+                    searchResults.map((u) => (
+                      <div key={u.uid} className="py-3 flex items-center gap-3">
+                        <Avatar name={u.displayName} url={u.avatarUrl} />
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm font-semibold truncate">{u.displayName}</p>
+                          <p className="text-xs text-slate-500 font-mono truncate" dir="ltr">
+                            @{u.username}
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            await blockUser(firebaseUser.uid, u);
+                            setSearchResults((prev) => prev.filter((item) => item.uid !== u.uid));
+                            showToast(`تم حظر @${u.username}`);
+                          }}
+                          className="p-2 rounded-lg text-slate-500 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-950/30"
+                          title="حظر"
+                        >
+                          <Ban className="w-4 h-4" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleOpenDirectChatWith(u)}
+                          className="px-3 py-2 rounded-xl bg-emerald-800 hover:bg-emerald-700 text-white text-xs font-medium shrink-0"
+                        >
+                          مراسلة
+                        </button>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </div>
+            )}
+
+            {activeTab === 'status' && (
+              <div className="flex-1 overflow-y-auto p-4 space-y-4">
+                <div className="space-y-2 border-b border-slate-200 dark:border-slate-800 pb-4">
+                  <textarea
+                    value={statusText}
+                    onChange={(e) => setStatusText(e.target.value.slice(0, MAX_STATUS_TEXT_LENGTH))}
+                    placeholder="أضف حالة نصية تختفي بعد 24 ساعة..."
+                    rows={2}
+                    className="w-full p-3 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-sm"
+                  />
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      disabled={!statusText.trim()}
+                      onClick={async () => {
+                        await publishStatus({
+                          author: profile,
+                          type: 'TEXT',
+                          textContent: statusText,
+                        });
+                        setStatusText('');
+                        showToast('تم نشر حالتك لمدة 24 ساعة.');
+                      }}
+                      className="flex-1 py-2 rounded-xl bg-emerald-800 text-white text-xs font-medium disabled:opacity-50"
+                    >
+                      نشر حالة نصية
+                    </button>
+                    <input
+                      ref={statusImageInputRef}
+                      type="file"
+                      accept="image/*"
+                      className="hidden"
+                      onChange={async (e) => {
+                        const file = e.target.files?.[0];
+                        e.target.value = '';
+                        if (!file) return;
+                        try {
+                          const dataUrl = await compressImageFileToDataUrl(file, 640);
+                          await publishStatus({
+                            author: profile,
+                            type: 'IMAGE',
+                            mediaUrl: dataUrl,
+                          });
+                          showToast('تم نشر صورة الحالة لمدة 24 ساعة.');
+                        } catch (err) {
+                          showToast(err instanceof Error ? err.message : 'تعذر نشر الصورة.');
+                        }
+                      }}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => statusImageInputRef.current?.click()}
+                      className="px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 text-xs font-medium"
+                    >
+                      نشر صورة
+                    </button>
+                  </div>
+                </div>
+
+                <div className="space-y-2">
+                  {statuses.length === 0 ? (
+                    <p className="text-center text-xs text-slate-500 py-8">
+                      لا توجد حالات نشطة خلال آخر 24 ساعة.
+                    </p>
+                  ) : (
+                    statuses.map((st) => (
+                      <button
+                        key={st.id}
+                        type="button"
+                        onClick={() => {
+                          setActiveStatusPreview(st);
+                          markStatusViewed(st.id, firebaseUser.uid);
+                        }}
+                        className="w-full text-right p-3 rounded-xl border border-slate-200 dark:border-slate-800 flex items-center gap-3 hover:bg-slate-50 dark:hover:bg-slate-800/60"
+                      >
+                        <Avatar name={st.authorName} url={st.authorAvatarUrl} />
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm font-semibold truncate">{st.authorName}</p>
+                          <p className="text-xs text-slate-500">
+                            @{st.authorUsername} · {formatArabicTime(st.createdAt)}
+                          </p>
+                        </div>
+                        <span className="text-xs text-emerald-700 dark:text-emerald-400">
+                          {st.type === 'IMAGE' ? 'صورة' : 'نص'}
+                        </span>
+                      </button>
+                    ))
+                  )}
+                </div>
+              </div>
+            )}
+
+            {activeTab === 'groups' && (
+              <div className="flex-1 overflow-y-auto p-4 space-y-4">
+                <div className="space-y-2 border-b border-slate-200 dark:border-slate-800 pb-4">
+                  <h2 className="font-bold text-sm flex items-center gap-1.5">
+                    <UserPlus className="w-4 h-4 text-emerald-700" />
+                    إنشاء مجموعة جديدة
+                  </h2>
+                  <input
+                    type="text"
+                    value={groupTitle}
+                    onChange={(e) => setGroupTitle(e.target.value)}
+                    placeholder="اسم المجموعة"
+                    className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-sm"
+                  />
+                  <input
+                    type="text"
+                    value={groupMemberQuery}
+                    onChange={async (e) => {
+                      const val = e.target.value;
+                      setGroupMemberQuery(val);
+                      if (!val.trim()) {
+                        setGroupCandidates([]);
+                        return;
+                      }
+                      const res = await searchUsersByUsername(val, firebaseUser.uid, blockedUidSet);
+                      setGroupCandidates(res);
+                    }}
+                    placeholder="ابحث باسم المستخدم لإضافة أعضاء..."
+                    className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-sm"
+                  />
+                  {groupCandidates.length > 0 && (
+                    <div className="max-h-36 overflow-y-auto border border-slate-200 dark:border-slate-700 rounded-xl divide-y divide-slate-100 dark:divide-slate-800">
+                      {groupCandidates.map((cand) => {
+                        const checked = selectedGroupUids.includes(cand.uid);
+                        return (
+                          <label
+                            key={cand.uid}
+                            className="flex items-center gap-2 px-3 py-2 text-xs cursor-pointer"
+                          >
+                            <input
+                              type="checkbox"
+                              checked={checked}
+                              onChange={() =>
+                                setSelectedGroupUids((prev) =>
+                                  checked ? prev.filter((id) => id !== cand.uid) : [...prev, cand.uid]
+                                )
+                              }
+                            />
+                            <span>
+                              {cand.displayName} (@{cand.username})
+                            </span>
+                          </label>
+                        );
+                      })}
+                    </div>
+                  )}
+                  <button
+                    type="button"
+                    disabled={groupTitle.trim().length < 2 || selectedGroupUids.length === 0}
+                    onClick={async () => {
+                      const created = await createGroupChat({
+                        creatorUid: firebaseUser.uid,
+                        title: groupTitle,
+                        memberUids: selectedGroupUids,
+                      });
+                      setGroupTitle('');
+                      setSelectedGroupUids([]);
+                      setGroupMemberQuery('');
+                      setGroupCandidates([]);
+                      setSelectedChat(created);
+                      setActiveTab('chats');
+                    }}
+                    className="w-full py-2.5 rounded-xl bg-emerald-800 text-white text-xs font-semibold disabled:opacity-50"
+                  >
+                    إنشاء المجموعة ({selectedGroupUids.length} مختارين)
+                  </button>
+                </div>
+
+                <div className="space-y-2">
+                  {chats
+                    .filter((c) => c.type === 'GROUP')
+                    .map((g) => (
+                      <button
+                        key={g.id}
+                        type="button"
+                        onClick={() => {
+                          setSelectedChat(g);
+                          setActiveTab('chats');
+                        }}
+                        className="w-full text-right p-3 rounded-xl border border-slate-200 dark:border-slate-800 flex items-center gap-3 hover:bg-slate-50 dark:hover:bg-slate-800/50"
+                      >
+                        <Avatar name={g.title} />
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm font-semibold truncate">{g.title}</p>
+                          <p className="text-xs text-slate-500">
+                            {g.participantIds.length} أعضاء · {g.lastMessageText}
+                          </p>
+                        </div>
                       </button>
                     ))}
+                </div>
+              </div>
+            )}
+
+            {activeTab === 'calls' && (
+              <div className="flex-1 overflow-y-auto p-4 space-y-3">
+                {callHistory.length === 0 ? (
+                  <p className="text-center text-xs text-slate-500 py-10 leading-relaxed">
+                    سجل المكالمات فارغ. افتح أي محادثة ثنائية واضغط على أيقونة المكالمة الصوتية أو المرئية لبدء اتصال WebRTC مباشر.
+                  </p>
+                ) : (
+                  callHistory.map((call) => (
+                    <div
+                      key={call.id}
+                      className="p-3 rounded-xl border border-slate-200 dark:border-slate-800 flex items-center justify-between"
+                    >
+                      <div>
+                        <p className="text-sm font-semibold">{call.calleeName}</p>
+                        <p className="text-xs text-slate-500">
+                          {call.type === 'VIDEO' ? 'مرئية' : 'صوتية'} · {formatArabicTime(call.createdAt)}
+                        </p>
+                      </div>
+                      {call.type === 'VIDEO' ? (
+                        <Video className="w-4 h-4 text-emerald-700" />
+                      ) : (
+                        <Phone className="w-4 h-4 text-emerald-700" />
+                      )}
+                    </div>
+                  ))
+                )}
+              </div>
+            )}
+
+            {activeTab === 'profile' && (
+              <div className="flex-1 overflow-y-auto p-4 space-y-4">
+                <div className="flex items-center gap-3">
+                  <Avatar name={profile.displayName} url={profile.avatarUrl} size="lg" />
+                  <div className="flex-1 min-w-0">
+                    <p className="font-bold text-base truncate">{profile.displayName}</p>
+                    <p className="text-xs text-emerald-700 dark:text-emerald-400 font-mono" dir="ltr">
+                      @{profile.username}
+                    </p>
                   </div>
+                  <input
+                    ref={avatarInputRef}
+                    type="file"
+                    accept="image/*"
+                    className="hidden"
+                    onChange={async (e) => {
+                      const file = e.target.files?.[0];
+                      e.target.value = '';
+                      if (!file) return;
+                      try {
+                        const dataUrl = await compressImageFileToDataUrl(file, 256);
+                        await updateProfileDetails({
+                          uid: firebaseUser.uid,
+                          displayName: editName || profile.displayName,
+                          bio: editBio,
+                          avatarUrl: dataUrl,
+                          currentUsernameLower: profile.usernameLower,
+                        });
+                        showToast('تم تحديث الصورة الشخصية.');
+                      } catch (err) {
+                        showToast(err instanceof Error ? err.message : 'تعذر تحديث الصورة.');
+                      }
+                    }}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => avatarInputRef.current?.click()}
+                    className="px-3 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 text-xs font-medium"
+                  >
+                    تغيير الصورة
+                  </button>
                 </div>
 
-                {/* Android Phone Preview Frame */}
-                <div className="lg:col-span-7 flex justify-center">
-                  <div
-                    className={`w-full max-w-[380px] h-[680px] rounded-[34px] border-[6px] border-slate-800 dark:border-slate-700 overflow-hidden flex flex-col shadow-xl ${
-                      previewDark ? 'bg-[#0B1117] text-slate-100' : 'bg-[#F8FAFC] text-slate-900'
-                    }`}
+                <div className="space-y-2.5">
+                  <input
+                    type="text"
+                    value={editName}
+                    onChange={(e) => setEditName(e.target.value)}
+                    placeholder="الاسم الظاهر"
+                    className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-sm"
+                  />
+                  <input
+                    type="text"
+                    dir="ltr"
+                    value={editUsername}
+                    onChange={(e) => setEditUsername(e.target.value)}
+                    placeholder="اسم المستخدم"
+                    className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-sm font-mono"
+                  />
+                  <textarea
+                    value={editBio}
+                    onChange={(e) => setEditBio(e.target.value.slice(0, MAX_BIO_LENGTH))}
+                    rows={2}
+                    placeholder="نبذة قصيرة"
+                    className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-sm"
+                  />
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      try {
+                        await updateProfileDetails({
+                          uid: firebaseUser.uid,
+                          displayName: editName,
+                          bio: editBio,
+                          avatarUrl: profile.avatarUrl,
+                          currentUsernameLower: profile.usernameLower,
+                          newRawUsername:
+                            editUsername.trim().toLowerCase() !== profile.usernameLower
+                              ? editUsername
+                              : undefined,
+                        });
+                        showToast('تم حفظ تعديلات الملف الشخصي.');
+                      } catch (err) {
+                        showToast(err instanceof Error ? err.message : 'تعذر التحديث.');
+                      }
+                    }}
+                    className="w-full py-2.5 rounded-xl bg-emerald-800 text-white text-xs font-semibold"
                   >
-                    {/* App Top Bar */}
-                    <div
-                      className={`px-4 py-3.5 border-b flex items-center justify-between ${
-                        previewDark
-                          ? 'bg-[#131C24] border-slate-800'
-                          : 'bg-white border-slate-200'
-                      }`}
+                    حفظ التعديلات
+                  </button>
+                </div>
+
+                <div className="border-t border-slate-200 dark:border-slate-800 pt-3 space-y-2.5 text-xs">
+                  <label className="flex items-center justify-between">
+                    <span>إظهار حالة الاتصال (متصل الآن)</span>
+                    <input
+                      type="checkbox"
+                      checked={profile.showOnlineStatus}
+                      onChange={(e) =>
+                        updatePrivacySettings(firebaseUser.uid, {
+                          showOnlineStatus: e.target.checked,
+                          showReadReceipts: profile.showReadReceipts,
+                          whoCanAddToGroups: profile.whoCanAddToGroups,
+                        })
+                      }
+                    />
+                  </label>
+                  <label className="flex items-center justify-between">
+                    <span>إرسال إشعارات القراءة</span>
+                    <input
+                      type="checkbox"
+                      checked={profile.showReadReceipts}
+                      onChange={(e) =>
+                        updatePrivacySettings(firebaseUser.uid, {
+                          showOnlineStatus: profile.showOnlineStatus,
+                          showReadReceipts: e.target.checked,
+                          whoCanAddToGroups: profile.whoCanAddToGroups,
+                        })
+                      }
+                    />
+                  </label>
+                  <div className="flex items-center justify-between">
+                    <span>إضافة المجموعات</span>
+                    <select
+                      value={profile.whoCanAddToGroups}
+                      onChange={(e) =>
+                        updatePrivacySettings(firebaseUser.uid, {
+                          showOnlineStatus: profile.showOnlineStatus,
+                          showReadReceipts: profile.showReadReceipts,
+                          whoCanAddToGroups: e.target.value as GroupPrivacySetting,
+                        })
+                      }
+                      className="px-2 py-1 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800"
                     >
-                      <span className="font-bold text-base text-emerald-700 dark:text-emerald-400 font-display">
-                        تواصل
-                      </span>
-                      <span className="text-xs opacity-70">
-                        {mobileScreen === 'welcome' && 'تسجيل الدخول'}
-                        {mobileScreen === 'onboarding' && 'الملف الشخصي الجديد'}
-                        {mobileScreen === 'chats' && 'المحادثات'}
-                        {mobileScreen === 'chatDetail' && 'غرفة المحادثة'}
-                        {mobileScreen === 'search' && 'البحث عن الأشخاص'}
-                        {mobileScreen === 'status' && 'الحالات'}
-                        {mobileScreen === 'groups' && 'المجموعات'}
-                        {mobileScreen === 'calls' && 'المكالمات'}
-                        {mobileScreen === 'profile' && 'الإعدادات والخصوصية'}
-                      </span>
-                    </div>
+                      <option value="EVERYONE">الجميع</option>
+                      <option value="CONTACTS_ONLY">جهات الاتصال فقط</option>
+                    </select>
+                  </div>
+                  <label className="flex items-center justify-between">
+                    <span>الوضع الداكن</span>
+                    <input
+                      type="checkbox"
+                      checked={darkMode}
+                      onChange={(e) => setDarkMode(e.target.checked)}
+                    />
+                  </label>
+                </div>
 
-                    {/* Screen Canvas */}
-                    <div className="flex-1 overflow-y-auto p-4">
-                      {mobileScreen === 'welcome' && (
-                        <div className="h-full flex flex-col justify-between py-6 text-center">
-                          <div className="mt-8 space-y-4">
-                            <div className="w-16 h-16 mx-auto rounded-2xl bg-emerald-800 text-white flex items-center justify-center">
-                              <MessageSquare className="w-8 h-8" />
-                            </div>
-                            <h3 className="text-xl font-bold font-display">مرحبًا بك في تواصل</h3>
-                            <p className="text-xs opacity-75 leading-relaxed px-4">
-                              تواصل مع الآخرين مباشرة عبر اسم المستخدم الفريد دون الحاجة لمشاركة رقم هاتفك أو بريدك الإلكتروني.
-                            </p>
-                          </div>
-                          <div className="space-y-3">
-                            <div className="w-full py-3 rounded-xl bg-emerald-800 text-white text-sm font-semibold">
-                              المتابعة باستخدام Google
-                            </div>
-                            <p className="text-[11px] opacity-65">
-                              يعتمد على Firebase Auth وقواعد Firestore — لا يدّعي تشفيرًا من الطرف إلى الطرف.
-                            </p>
-                          </div>
-                        </div>
-                      )}
-
-                      {mobileScreen === 'onboarding' && (
-                        <div className="space-y-4 py-4">
-                          <div className="w-16 h-16 mx-auto rounded-full bg-emerald-100 text-emerald-900 flex items-center justify-center font-bold text-xl">
-                            ت
-                          </div>
-                          <h3 className="text-center font-bold">إعداد الملف الشخصي</h3>
-                          <div className="space-y-3 text-xs">
-                            <div className="p-3 rounded-xl border border-emerald-700/30">
-                              <div className="opacity-60 mb-1">الاسم الظاهر</div>
-                              <div className="font-medium">حقل إدخال الاسم الظاهر</div>
-                            </div>
-                            <div className="p-3 rounded-xl border border-emerald-700/30">
-                              <div className="opacity-60 mb-1">اسم المستخدم الفريد (3-20 حرفًا)</div>
-                              <div className="font-mono" dir="ltr">
-                                @username_example
-                              </div>
-                            </div>
-                            <p className="text-[11px] text-emerald-700 dark:text-emerald-400">
-                              يُحجز عبر Firestore Transaction لضمان عدم التكرار أو التحسس لحالة الأحرف.
-                            </p>
-                          </div>
-                        </div>
-                      )}
-
-                      {mobileScreen === 'chats' && (
-                        <div className="h-full flex flex-col items-center justify-center text-center px-4 space-y-3">
-                          <div className="w-14 h-14 rounded-full bg-emerald-800/10 text-emerald-700 dark:text-emerald-400 flex items-center justify-center">
-                            <MessageSquare className="w-7 h-7" />
-                          </div>
-                          <p className="font-bold text-sm">قائمة المحادثات الحية</p>
-                          <p className="text-xs opacity-70 leading-relaxed">
-                            عند ربط Firebase، تظهر هنا المحادثات مرتبة حسب آخر رسالة مع عداد الرسائل غير المقروءة وحالة الاتصال عند تفعيلها.
-                          </p>
-                          <button
-                            type="button"
-                            onClick={() => setMobileScreen('search')}
-                            className="mt-2 px-4 py-2 rounded-xl bg-emerald-800 text-white text-xs font-medium"
-                          >
-                            الانتقال للبحث عن اسم مستخدم
-                          </button>
-                        </div>
-                      )}
-
-                      {mobileScreen === 'chatDetail' && (
-                        <div className="h-full flex flex-col justify-between">
-                          <div className="space-y-3">
-                            <div className="flex items-center justify-between text-xs pb-2 border-b border-slate-200 dark:border-slate-800">
-                              <span className="flex items-center gap-1 font-semibold">
-                                <ArrowRight className="w-4 h-4" />
-                                شاشة المحادثة
-                              </span>
-                              <span className="flex items-center gap-3 text-emerald-700 dark:text-emerald-400">
-                                <Phone className="w-4 h-4" />
-                                <Video className="w-4 h-4" />
-                              </span>
-                            </div>
-                            <div className="p-3 rounded-xl border border-dashed border-emerald-700/40 text-xs leading-relaxed opacity-80">
-                              تدعم الشاشة: فقاعات RTL، تحميل الصفحات الأقدم (Pagination)، إعادة الإرسال عند انقطاع الإنترنت، إرسال الصور والفيديو والرسائل الصوتية، وخيار حذف الرسالة من واجهة المستخدم فقط.
-                            </div>
-                          </div>
-                          <div className="flex items-center gap-2 pt-2 border-t border-slate-200 dark:border-slate-800">
-                            <ImageIcon className="w-5 h-5 opacity-70" />
-                            <div className="flex-1 px-3 py-2 rounded-full border border-slate-300 dark:border-slate-700 text-xs opacity-60">
-                              اكتب رسالة...
-                            </div>
-                            <Mic className="w-5 h-5 text-emerald-700" />
-                            <Send className="w-5 h-5 text-emerald-700" />
-                          </div>
-                        </div>
-                      )}
-
-                      {mobileScreen === 'search' && (
-                        <div className="space-y-4">
-                          <div className="px-3 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 flex items-center gap-2 text-xs opacity-75">
-                            <Search className="w-4 h-4" />
-                            <span>ابحث عن اسم المستخدم</span>
-                          </div>
-                          <p className="text-xs opacity-75 leading-relaxed">
-                            يبحث الاستعلام في حقل usernameLower المعياري ويعرض الصورة والاسم الظاهر واسم المستخدم فقط مع زر &quot;مراسلة&quot; و&quot;حظر&quot;، دون كشف البريد الإلكتروني.
-                          </p>
-                        </div>
-                      )}
-
-                      {mobileScreen === 'status' && (
-                        <div className="space-y-4 text-center py-8">
-                          <CircleDot className="w-10 h-10 mx-auto text-emerald-700 dark:text-emerald-400" />
-                          <h3 className="font-bold text-sm">الحالات (24 ساعة)</h3>
-                          <p className="text-xs opacity-75 leading-relaxed">
-                            تدعم نشر الحالات النصية أو الصور أو الفيديو مع انتهاء صلاحية تلقائي بعد 24 ساعة عبر الحقل expiresAt في Firestore.
-                          </p>
-                        </div>
-                      )}
-
-                      {mobileScreen === 'groups' && (
-                        <div className="space-y-4 text-center py-8">
-                          <Users className="w-10 h-10 mx-auto text-emerald-700 dark:text-emerald-400" />
-                          <h3 className="font-bold text-sm">المجموعات</h3>
-                          <p className="text-xs opacity-75 leading-relaxed">
-                            إنشاء مجموعات حتى 50 عضوًا وإضافتهم عبر اسم المستخدم مع صلاحيات ADMIN وMEMBER داخل المجموعة الفرعية members.
-                          </p>
-                        </div>
-                      )}
-
-                      {mobileScreen === 'calls' && (
-                        <div className="space-y-4 text-center py-8">
-                          <Phone className="w-10 h-10 mx-auto text-emerald-700 dark:text-emerald-400" />
-                          <h3 className="font-bold text-sm">مكالمات WebRTC الصوتية والمرئية</h3>
-                          <p className="text-xs opacity-75 leading-relaxed">
-                            تعتمد على stream-webrtc-android وتتبادل إشارات SDP وICE Candidates عبر مجموعة calls المحمية في Firestore.
-                          </p>
-                        </div>
-                      )}
-
-                      {mobileScreen === 'profile' && (
-                        <div className="space-y-3 text-xs">
-                          <h3 className="font-bold text-sm">الملف الشخصي والخصوصية</h3>
-                          <div className="p-3 rounded-xl border border-slate-200 dark:border-slate-800 space-y-2">
-                            <p>• تعديل الاسم الظاهر والنبذة والصورة الشخصية</p>
-                            <p>• تغيير اسم المستخدم ذريًا دون تكرار</p>
-                            <p>• إخفاء حالة الاتصال وإشعارات القراءة</p>
-                            <p>• إدارة قائمة المستخدمين المحظورين</p>
-                            <p>• تسجيل الخروج أو حذف الحساب مع تحرير اسم المستخدم</p>
-                          </div>
-                        </div>
-                      )}
-                    </div>
-
-                    {/* Bottom Tab Bar */}
-                    <div
-                      className={`border-t px-1 py-2 grid grid-cols-6 text-[10px] text-center ${
-                        previewDark
-                          ? 'bg-[#131C24] border-slate-800'
-                          : 'bg-white border-slate-200'
-                      }`}
-                    >
-                      {(
-                        [
-                          ['chats', 'المحادثات', MessageSquare],
-                          ['search', 'البحث', Search],
-                          ['status', 'الحالات', CircleDot],
-                          ['groups', 'المجموعات', Users],
-                          ['calls', 'المكالمات', Phone],
-                          ['profile', 'حسابي', Settings],
-                        ] as const
-                      ).map(([key, label, IconComp]) => (
+                {blockedUsers.length > 0 && (
+                  <div className="border-t border-slate-200 dark:border-slate-800 pt-3 space-y-2">
+                    <p className="text-xs font-bold">المحظورون ({blockedUsers.length})</p>
+                    {blockedUsers.map((b) => (
+                      <div key={b.blockedUid} className="flex items-center justify-between text-xs">
+                        <span>
+                          {b.blockedDisplayName} (@{b.blockedUsername})
+                        </span>
                         <button
-                          key={key}
                           type="button"
-                          onClick={() => setMobileScreen(key)}
-                          className={`flex flex-col items-center gap-1 py-1 ${
-                            mobileScreen === key
-                              ? 'text-emerald-700 dark:text-emerald-400 font-bold'
-                              : 'opacity-65'
+                          onClick={() => unblockUser(firebaseUser.uid, b.blockedUid)}
+                          className="text-emerald-700 dark:text-emerald-400 font-medium"
+                        >
+                          إلغاء الحظر
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                <div className="border-t border-slate-200 dark:border-slate-800 pt-3 space-y-2">
+                  <PWAInstallButton variant="primary" />
+                  <button
+                    type="button"
+                    onClick={() => setShowAndroidModal(true)}
+                    className="w-full py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 text-xs font-medium flex items-center justify-center gap-2"
+                  >
+                    <Code2 className="w-4 h-4" />
+                    <span>مشروع Android (Kotlin) وحزمة ZIP</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => signOutAccount(firebaseUser.uid)}
+                    className="w-full py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 text-xs font-medium flex items-center justify-center gap-2"
+                  >
+                    <LogOut className="w-4 h-4" />
+                    <span>تسجيل الخروج</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setConfirmDeleteAccount(true)}
+                    className="w-full py-2.5 rounded-xl bg-red-600 hover:bg-red-500 text-white text-xs font-semibold"
+                  >
+                    حذف الحساب نهائيًا
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Right/Detail Chat Workspace */}
+          <div
+            className={`flex-1 flex flex-col bg-slate-100/70 dark:bg-slate-950 overflow-hidden ${
+              selectedChat && activeTab === 'chats' ? 'flex' : 'hidden md:flex'
+            }`}
+          >
+            {selectedChat ? (
+              <>
+                <div className="h-14 shrink-0 bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 px-4 flex items-center justify-between gap-3">
+                  <div className="flex items-center gap-3 min-w-0">
+                    <button
+                      type="button"
+                      onClick={() => setSelectedChat(null)}
+                      className="md:hidden p-2 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800"
+                      aria-label="رجوع"
+                    >
+                      <ArrowRight className="w-5 h-5" />
+                    </button>
+                    <Avatar
+                      name={
+                        selectedChat.type === 'GROUP'
+                          ? selectedChat.title
+                          : activePeer?.displayName || 'مستخدم'
+                      }
+                      url={
+                        selectedChat.type === 'GROUP'
+                          ? selectedChat.avatarUrl
+                          : activePeer?.avatarUrl
+                      }
+                      size="sm"
+                      isOnline={activePeer?.showOnlineStatus && activePeer?.isOnline}
+                    />
+                    <div className="min-w-0">
+                      <p className="font-bold text-sm truncate">
+                        {selectedChat.type === 'GROUP'
+                          ? selectedChat.title
+                          : activePeer?.displayName || 'محادثة خاصة'}
+                      </p>
+                      <p className="text-[11px] text-slate-500 dark:text-slate-400 truncate">
+                        {selectedChat.type === 'GROUP'
+                          ? `${selectedChat.participantIds.length} أعضاء`
+                          : activePeer?.showOnlineStatus && activePeer?.isOnline
+                          ? 'متصل الآن'
+                          : activePeer
+                          ? `@${activePeer.username}`
+                          : ''}
+                      </p>
+                    </div>
+                  </div>
+
+                  {selectedChat.type === 'DIRECT' && activePeer && (
+                    <div className="flex items-center gap-1">
+                      <button
+                        type="button"
+                        onClick={() => setActiveCall({ peer: activePeer, type: 'AUDIO' })}
+                        className="p-2.5 rounded-xl hover:bg-slate-100 dark:hover:bg-slate-800 text-emerald-800 dark:text-emerald-400"
+                        title="مكالمة صوتية"
+                      >
+                        <Phone className="w-4 h-4" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setActiveCall({ peer: activePeer, type: 'VIDEO' })}
+                        className="p-2.5 rounded-xl hover:bg-slate-100 dark:hover:bg-slate-800 text-emerald-800 dark:text-emerald-400"
+                        title="مكالمة مرئية"
+                      >
+                        <Video className="w-4 h-4" />
+                      </button>
+                    </div>
+                  )}
+                </div>
+
+                <div className="flex-1 overflow-y-auto p-4 space-y-2.5">
+                  {hasMoreOlder && combinedMessages.length >= 20 && (
+                    <div className="text-center">
+                      <button
+                        type="button"
+                        onClick={handleLoadOlder}
+                        disabled={loadingOlder}
+                        className="px-3 py-1.5 rounded-lg bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-xs text-slate-600 dark:text-slate-300"
+                      >
+                        {loadingOlder ? 'جاري التحميل...' : 'تحميل رسائل أقدم'}
+                      </button>
+                    </div>
+                  )}
+
+                  {combinedMessages.map((msg) => {
+                    const isMine = msg.senderId === firebaseUser.uid;
+                    return (
+                      <div
+                        key={msg.id}
+                        className={`flex ${isMine ? 'justify-start' : 'justify-end'}`}
+                      >
+                        <div
+                          className={`group relative max-w-[78%] sm:max-w-md rounded-2xl px-3.5 py-2.5 text-sm shadow-xs ${
+                            isMine
+                              ? 'bg-emerald-800 text-white rounded-tr-sm'
+                              : 'bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 border border-slate-200 dark:border-slate-800 rounded-tl-sm'
                           }`}
                         >
-                          <IconComp className="w-4 h-4" />
-                          <span>{label}</span>
-                        </button>
-                      ))}
-                    </div>
-                  </div>
+                          {msg.type === 'IMAGE' && msg.mediaUrl ? (
+                            <img
+                              src={msg.mediaUrl}
+                              alt="صورة"
+                              className="max-h-64 rounded-xl object-cover mb-1"
+                            />
+                          ) : msg.type === 'AUDIO' && msg.mediaUrl ? (
+                            <audio controls src={msg.mediaUrl} className="max-w-[230px] h-9" />
+                          ) : (
+                            <p className="whitespace-pre-wrap break-words leading-relaxed">
+                              {msg.text}
+                            </p>
+                          )}
+
+                          <div
+                            className={`mt-1 flex items-center justify-between gap-3 text-[10px] ${
+                              isMine ? 'text-emerald-100/80' : 'text-slate-400'
+                            }`}
+                          >
+                            <span className="tabular-nums">{formatArabicTime(msg.createdAt)}</span>
+                            <div className="flex items-center gap-1.5">
+                              {isMine && msg.deliveryStatus === 'FAILED' && (
+                                <button
+                                  type="button"
+                                  onClick={() => handleRetryFailed(msg)}
+                                  className="inline-flex items-center gap-1 text-red-200 underline"
+                                >
+                                  <RefreshCw className="w-3 h-3" />
+                                  إعادة
+                                </button>
+                              )}
+                              {isMine && msg.deliveryStatus === 'READ' && (
+                                <CheckCheck className="w-3.5 h-3.5 text-emerald-300" />
+                              )}
+                              {isMine && msg.deliveryStatus === 'SENT' && (
+                                <Check className="w-3.5 h-3.5" />
+                              )}
+                              {!msg.id.startsWith('local_') && (
+                                <button
+                                  type="button"
+                                  onClick={() => setDeleteTargetMsg(msg)}
+                                  className="opacity-70 hover:opacity-100"
+                                  title="حذف من حسابك"
+                                >
+                                  <Trash2 className="w-3 h-3" />
+                                </button>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
                 </div>
-              </div>
-            </section>
-          )}
 
-          {activeTab === 'security' && (
-            <section className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              {SECURITY_PILLARS.map((pillar) => (
-                <article
-                  key={pillar.title}
-                  className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-6 space-y-2"
+                <form
+                  onSubmit={handleSendText}
+                  className="p-3 bg-white dark:bg-slate-900 border-t border-slate-200 dark:border-slate-800 flex items-center gap-2"
                 >
-                  <div className="flex items-center gap-2 text-emerald-800 dark:text-emerald-400 font-bold">
-                    <ShieldCheck className="w-5 h-5 shrink-0" />
-                    <h2 className="text-base font-display">{pillar.title}</h2>
-                  </div>
-                  <p className="text-sm text-slate-600 dark:text-slate-300 leading-relaxed">
-                    {pillar.detail}
-                  </p>
-                </article>
-              ))}
-            </section>
-          )}
-
-          {activeTab === 'setup' && (
-            <section className="space-y-6">
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                {SETUP_STEPS.map((item) => (
-                  <article
-                    key={item.step}
-                    className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-6 space-y-3"
+                  <input
+                    ref={imageInputRef}
+                    type="file"
+                    accept="image/*"
+                    className="hidden"
+                    onChange={handleChatImageSelected}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => imageInputRef.current?.click()}
+                    className="p-2.5 rounded-xl hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-300"
+                    aria-label="إرسال صورة"
                   >
-                    <div className="flex items-center gap-2 text-emerald-800 dark:text-emerald-400 font-bold">
-                      <Wrench className="w-4 h-4 shrink-0" />
-                      <h2 className="text-base font-display">
-                        {item.step}. {item.title}
-                      </h2>
-                    </div>
-                    <ul className="space-y-2 text-sm text-slate-600 dark:text-slate-300">
-                      {item.items.map((line, i) => (
-                        <li key={i} className="flex items-start gap-2 leading-relaxed">
-                          <CheckCircle2 className="w-4 h-4 text-emerald-700 dark:text-emerald-400 shrink-0 mt-1" />
-                          <span>{line}</span>
-                        </li>
-                      ))}
-                    </ul>
-                  </article>
-                ))}
+                    <ImageIcon className="w-5 h-5" />
+                  </button>
+
+                  <input
+                    type="text"
+                    value={draftText}
+                    onChange={(e) => setDraftText(e.target.value)}
+                    placeholder="اكتب رسالة..."
+                    className="flex-1 px-4 py-2.5 rounded-full border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-700"
+                  />
+
+                  {draftText.trim() ? (
+                    <button
+                      type="submit"
+                      className="p-2.5 rounded-full bg-emerald-800 hover:bg-emerald-700 text-white"
+                      aria-label="إرسال"
+                    >
+                      <Send className="w-5 h-5" />
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={handleToggleVoiceRecord}
+                      className={`p-2.5 rounded-full ${
+                        isRecordingAudio
+                          ? 'bg-red-600 text-white'
+                          : 'bg-emerald-800 text-white hover:bg-emerald-700'
+                      }`}
+                      aria-label={isRecordingAudio ? 'إيقاف وإرسال الصوت' : 'تسجيل صوتي'}
+                    >
+                      {isRecordingAudio ? <Square className="w-5 h-5" /> : <Mic className="w-5 h-5" />}
+                    </button>
+                  )}
+                </form>
+              </>
+            ) : (
+              <div className="flex-1 flex flex-col items-center justify-center p-8 text-center space-y-3 text-slate-500">
+                <div className="w-16 h-16 rounded-3xl bg-emerald-800/10 text-emerald-800 dark:text-emerald-400 flex items-center justify-center">
+                  <MessageSquare className="w-8 h-8" />
+                </div>
+                <h2 className="text-lg font-bold text-slate-900 dark:text-slate-100 font-display">
+                  تواصل للمراسلة الفورية
+                </h2>
+                <p className="text-xs max-w-sm leading-relaxed">
+                  اختر محادثة من القائمة أو ابحث عن اسم مستخدم جديد لبدء الدردشة أو إجراء مكالمة صوتية ومرئية.
+                </p>
               </div>
-            </section>
-          )}
-        </main>
+            )}
+          </div>
+        </div>
+
+        {/* Mobile Bottom Navigation */}
+        {!selectedChat && (
+          <nav className="md:hidden shrink-0 bg-white dark:bg-slate-900 border-t border-slate-200 dark:border-slate-800 grid grid-cols-6 py-1.5 text-[10px]">
+            {(
+              [
+                ['chats', 'المحادثات', MessageSquare],
+                ['search', 'البحث', Search],
+                ['status', 'الحالات', CircleDot],
+                ['groups', 'المجموعات', Users],
+                ['calls', 'المكالمات', Phone],
+                ['profile', 'حسابي', Settings],
+              ] as const
+            ).map(([key, label, IconComp]) => (
+              <button
+                key={key}
+                type="button"
+                onClick={() => setActiveTab(key)}
+                className={`flex flex-col items-center justify-center gap-1 py-1 min-h-[44px] ${
+                  activeTab === key
+                    ? 'text-emerald-800 dark:text-emerald-400 font-bold'
+                    : 'text-slate-500 dark:text-slate-400'
+                }`}
+              >
+                <IconComp className="w-5 h-5" />
+                <span>{label}</span>
+              </button>
+            ))}
+          </nav>
+        )}
       </div>
+
+      {/* Delete message policy dialog */}
+      {deleteTargetMsg && selectedChat && (
+        <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="max-w-sm w-full bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 space-y-4">
+            <h3 className="font-bold text-base">حذف الرسالة من واجهتك</h3>
+            <p className="text-xs text-slate-600 dark:text-slate-300 leading-relaxed">
+              سيتم إخفاء هذه الرسالة من حسابك فقط، ولن يتم حذفها من أجهزة المشاركين الآخرين في المحادثة.
+            </p>
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setDeleteTargetMsg(null)}
+                className="px-4 py-2 rounded-xl text-xs border border-slate-200 dark:border-slate-700"
+              >
+                إلغاء
+              </button>
+              <button
+                type="button"
+                onClick={async () => {
+                  await deleteMessageForCurrentUser(
+                    selectedChat.id,
+                    deleteTargetMsg.id,
+                    firebaseUser.uid
+                  );
+                  setDeleteTargetMsg(null);
+                }}
+                className="px-4 py-2 rounded-xl text-xs bg-red-600 text-white font-semibold"
+              >
+                حذف لديّ فقط
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Status Preview Modal */}
+      {activeStatusPreview && (
+        <div className="fixed inset-0 z-50 bg-black/75 flex items-center justify-center p-4">
+          <div className="max-w-md w-full bg-white dark:bg-slate-900 rounded-2xl p-5 space-y-4">
+            <div className="flex items-center justify-between">
+              <span className="font-bold text-sm">
+                {activeStatusPreview.authorName} (@{activeStatusPreview.authorUsername})
+              </span>
+              <span className="text-xs text-slate-400">
+                المشاهدات: {activeStatusPreview.viewerUids.length}
+              </span>
+            </div>
+            {activeStatusPreview.type === 'IMAGE' && activeStatusPreview.mediaUrl ? (
+              <img
+                src={activeStatusPreview.mediaUrl}
+                alt="صورة الحالة"
+                className="w-full max-h-80 rounded-xl object-cover"
+              />
+            ) : (
+              <div className="p-8 rounded-xl bg-emerald-800 text-white text-center text-base font-medium">
+                {activeStatusPreview.textContent}
+              </div>
+            )}
+            <button
+              type="button"
+              onClick={() => setActiveStatusPreview(null)}
+              className="w-full py-2.5 rounded-xl bg-slate-100 dark:bg-slate-800 text-xs font-semibold"
+            >
+              إغلاق
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Account Dialog */}
+      {confirmDeleteAccount && (
+        <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4">
+          <div className="max-w-sm w-full bg-white dark:bg-slate-900 rounded-2xl p-5 space-y-4">
+            <div className="flex items-center gap-2 text-red-600 font-bold">
+              <ShieldAlert className="w-5 h-5" />
+              <h3>تأكيد حذف الحساب</h3>
+            </div>
+            <p className="text-xs text-slate-600 dark:text-slate-300 leading-relaxed">
+              سيتم حذف ملفك الشخصي وبياناتك الخاصة وقائمة الحظر وتحرير اسم المستخدم @{profile.username} نهائيًا.
+            </p>
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setConfirmDeleteAccount(false)}
+                className="px-4 py-2 rounded-xl text-xs border border-slate-200 dark:border-slate-700"
+              >
+                إلغاء
+              </button>
+              <button
+                type="button"
+                onClick={async () => {
+                  setConfirmDeleteAccount(false);
+                  try {
+                    await deleteAccountAndOwnedData(firebaseUser.uid, profile.usernameLower);
+                  } catch (err) {
+                    showToast(
+                      err instanceof Error
+                        ? err.message
+                        : 'يرجى إعادة تسجيل الدخول ثم محاولة حذف الحساب.'
+                    );
+                  }
+                }}
+                className="px-4 py-2 rounded-xl text-xs bg-red-600 text-white font-semibold"
+              >
+                حذف نهائي
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Active WebRTC Call */}
+      {activeCall && profile && (
+        <WebRtcCallOverlay
+          currentUser={profile}
+          peerUser={activeCall.peer}
+          incomingSession={activeCall.incoming}
+          callType={activeCall.type}
+          onClose={() => setActiveCall(null)}
+        />
+      )}
+
+      {/* Android Source & ZIP Modal */}
+      {showAndroidModal && <AndroidProjectModal onClose={() => setShowAndroidModal(false)} />}
     </div>
   );
 }

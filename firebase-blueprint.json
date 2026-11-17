@@ -1,0 +1,226 @@
+{
+  "entities": {
+    "UserPublicProfile": {
+      "title": "UserPublicProfile",
+      "description": "Public user profile accessible for username discovery without exposing PII.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "username": { "type": "string", "minLength": 3, "maxLength": 20, "pattern": "^[a-zA-Z0-9_]{3,20}$" },
+        "usernameLower": { "type": "string", "minLength": 3, "maxLength": 20, "pattern": "^[a-z0-9_]{3,20}$" },
+        "displayName": { "type": "string", "minLength": 2, "maxLength": 50 },
+        "bio": { "type": "string", "maxLength": 160 },
+        "avatarUrl": { "type": "string", "maxLength": 1024 },
+        "isOnline": { "type": "boolean" },
+        "lastSeen": { "type": "string", "format": "date-time" },
+        "showOnlineStatus": { "type": "boolean" },
+        "showReadReceipts": { "type": "boolean" },
+        "whoCanAddToGroups": { "type": "string", "enum": ["EVERYONE", "CONTACTS_ONLY"] },
+        "profileCompleted": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "uid", "username", "usernameLower", "displayName", "bio", "avatarUrl",
+        "isOnline", "lastSeen", "showOnlineStatus", "showReadReceipts",
+        "whoCanAddToGroups", "profileCompleted", "createdAt", "updatedAt"
+      ]
+    },
+    "UserPrivateInfo": {
+      "title": "UserPrivateInfo",
+      "description": "Strictly owner-only PII such as email and FCM tokens.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "email": { "type": "string", "maxLength": 254 },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "email", "updatedAt"]
+    },
+    "UsernameReservation": {
+      "title": "UsernameReservation",
+      "description": "Atomic unique lowercase username reservation mapping to UID.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "usernameLower": { "type": "string", "minLength": 3, "maxLength": 20, "pattern": "^[a-z0-9_]{3,20}$" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "usernameLower", "createdAt"]
+    },
+    "BlockedUser": {
+      "title": "BlockedUser",
+      "description": "Owner-managed blocked user record.",
+      "type": "object",
+      "properties": {
+        "blockedUid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "blockedUsername": { "type": "string", "minLength": 3, "maxLength": 20 },
+        "blockedDisplayName": { "type": "string", "minLength": 1, "maxLength": 50 },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["blockedUid", "blockedUsername", "blockedDisplayName", "createdAt"]
+    },
+    "Chat": {
+      "title": "Chat",
+      "description": "Direct 1:1 or group conversation metadata.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "type": { "type": "string", "enum": ["DIRECT", "GROUP"] },
+        "title": { "type": "string", "maxLength": 60 },
+        "avatarUrl": { "type": "string", "maxLength": 1024 },
+        "createdBy": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "participantIds": { "type": "array" },
+        "lastMessageText": { "type": "string", "maxLength": 200 },
+        "lastMessageType": { "type": "string", "enum": ["TEXT", "IMAGE", "VIDEO", "AUDIO", "SYSTEM"] },
+        "lastMessageSenderId": { "type": "string", "maxLength": 128 },
+        "lastMessageAt": { "type": "string", "format": "date-time" },
+        "unreadCounts": { "type": "object" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "id", "type", "title", "avatarUrl", "createdBy", "participantIds",
+        "lastMessageText", "lastMessageType", "lastMessageSenderId",
+        "lastMessageAt", "unreadCounts", "createdAt", "updatedAt"
+      ]
+    },
+    "ChatMember": {
+      "title": "ChatMember",
+      "description": "Master Gate membership document for chat access control.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "role": { "type": "string", "enum": ["ADMIN", "MEMBER"] },
+        "joinedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "role", "joinedAt"]
+    },
+    "Message": {
+      "title": "Message",
+      "description": "Instant message within a chat room.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "chatId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "senderId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "type": { "type": "string", "enum": ["TEXT", "IMAGE", "VIDEO", "AUDIO", "SYSTEM"] },
+        "text": { "type": "string", "maxLength": 4000 },
+        "mediaUrl": { "type": "string", "maxLength": 1048576 },
+        "mediaDurationSec": { "type": "number" },
+        "deliveryStatus": { "type": "string", "enum": ["SENT", "DELIVERED", "READ"] },
+        "readBy": { "type": "object" },
+        "deletedForUids": { "type": "array" },
+        "localClientId": { "type": "string", "maxLength": 64 },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "id", "chatId", "senderId", "type", "text", "mediaUrl",
+        "mediaDurationSec", "deliveryStatus", "readBy", "deletedForUids",
+        "localClientId", "createdAt"
+      ]
+    },
+    "StatusItem": {
+      "title": "StatusItem",
+      "description": "24-hour expiring text or media status update.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "authorUid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "authorName": { "type": "string", "minLength": 1, "maxLength": 50 },
+        "authorUsername": { "type": "string", "minLength": 3, "maxLength": 20 },
+        "authorAvatarUrl": { "type": "string", "maxLength": 1024 },
+        "type": { "type": "string", "enum": ["TEXT", "IMAGE", "VIDEO"] },
+        "textContent": { "type": "string", "maxLength": 500 },
+        "backgroundColorHex": { "type": "string", "maxLength": 16 },
+        "mediaUrl": { "type": "string", "maxLength": 1048576 },
+        "viewerUids": { "type": "array" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "expiresAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "id", "authorUid", "authorName", "authorUsername", "authorAvatarUrl",
+        "type", "textContent", "backgroundColorHex", "mediaUrl", "viewerUids",
+        "createdAt", "expiresAt"
+      ]
+    },
+    "CallSession": {
+      "title": "CallSession",
+      "description": "WebRTC call signaling session between caller and callee.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "callerUid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "callerName": { "type": "string", "minLength": 1, "maxLength": 50 },
+        "callerAvatarUrl": { "type": "string", "maxLength": 1024 },
+        "calleeUid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "calleeName": { "type": "string", "minLength": 1, "maxLength": 50 },
+        "calleeAvatarUrl": { "type": "string", "maxLength": 1024 },
+        "type": { "type": "string", "enum": ["AUDIO", "VIDEO"] },
+        "status": { "type": "string", "enum": ["RINGING", "CONNECTED", "ENDED", "DECLINED", "MISSED"] },
+        "offerSdp": { "type": "string", "maxLength": 32768 },
+        "answerSdp": { "type": "string", "maxLength": 32768 },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "id", "callerUid", "callerName", "callerAvatarUrl",
+        "calleeUid", "calleeName", "calleeAvatarUrl",
+        "type", "status", "offerSdp", "answerSdp", "createdAt"
+      ]
+    },
+    "IceCandidate": {
+      "title": "IceCandidate",
+      "description": "WebRTC ICE candidate for call signaling.",
+      "type": "object",
+      "properties": {
+        "senderUid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "sdpMid": { "type": "string", "maxLength": 64 },
+        "sdpMLineIndex": { "type": "number" },
+        "sdpCandidate": { "type": "string", "maxLength": 2048 }
+      },
+      "required": ["senderUid", "sdpMid", "sdpMLineIndex", "sdpCandidate"]
+    }
+  },
+  "firestore": {
+    "/users/{uid}": {
+      "schema": { "$ref": "#/entities/UserPublicProfile" },
+      "description": "Public profile records without email PII."
+    },
+    "/users/{uid}/private/info": {
+      "schema": { "$ref": "#/entities/UserPrivateInfo" },
+      "description": "Owner-only PII record storing email."
+    },
+    "/users/{uid}/blocked/{blockedUid}": {
+      "schema": { "$ref": "#/entities/BlockedUser" },
+      "description": "Blocked user entries owned by uid."
+    },
+    "/usernames/{usernameLower}": {
+      "schema": { "$ref": "#/entities/UsernameReservation" },
+      "description": "Case-insensitive unique username lock."
+    },
+    "/chats/{chatId}": {
+      "schema": { "$ref": "#/entities/Chat" },
+      "description": "Direct and group chats."
+    },
+    "/chats/{chatId}/members/{memberUid}": {
+      "schema": { "$ref": "#/entities/ChatMember" },
+      "description": "Master Gate membership subcollection."
+    },
+    "/chats/{chatId}/messages/{messageId}": {
+      "schema": { "$ref": "#/entities/Message" },
+      "description": "Messages inside a chat."
+    },
+    "/statuses/{statusId}": {
+      "schema": { "$ref": "#/entities/StatusItem" },
+      "description": "24-hour status updates."
+    },
+    "/calls/{callId}": {
+      "schema": { "$ref": "#/entities/CallSession" },
+      "description": "WebRTC call signaling records."
+    },
+    "/calls/{callId}/iceCandidates/{candidateId}": {
+      "schema": { "$ref": "#/entities/IceCandidate" },
+      "description": "WebRTC ICE candidates for a call."
+    }
+  }
+}
