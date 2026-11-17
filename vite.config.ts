@@ -21,6 +21,9 @@ export default defineConfig(() => {
           theme_color: '#065F46',
           background_color: '#F8FAFC',
           display: 'standalone',
+          orientation: 'portrait-primary',
+          prefer_related_applications: false,
+          categories: ['social', 'communication'],
           dir: 'rtl',
           lang: 'ar',
           start_url: '/',
@@ -49,6 +52,10 @@ export default defineConfig(() => {
         workbox: {
           globPatterns: ['**/*.{js,css,html,ico,png,svg,woff,woff2}'],
           maximumFileSizeToCacheInBytes: 5 * 1024 * 1024,
+          navigateFallback: '/index.html',
+          cleanupOutdatedCaches: true,
+          clientsClaim: true,
+          skipWaiting: true,
         },
         devOptions: {
           enabled: true,

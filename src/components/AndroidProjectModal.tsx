@@ -1,6 +1,5 @@
 import React, { useMemo, useState } from 'react';
 import { Check, Copy, Download, FileCode2, Search, X } from 'lucide-react';
-import JSZip from 'jszip';
 
 const androidFileModules = import.meta.glob('/android/**/*', {
   query: '?raw',
@@ -31,20 +30,6 @@ export const AndroidProjectModal: React.FC<{ onClose: () => void }> = ({ onClose
 
   const activeFile = files.find((f) => f.path === selectedPath) || filtered[0];
 
-  const handleDownloadZip = async () => {
-    const zip = new JSZip();
-    files.forEach((f) => zip.file(f.path, f.content));
-    const blob = await zip.generateAsync({ type: 'blob', compression: 'DEFLATE' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = 'tawasul-android-project.zip';
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    setTimeout(() => URL.revokeObjectURL(url), 1000);
-  };
-
   return (
     <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
       <div className="w-full max-w-5xl h-[85vh] bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl overflow-hidden flex flex-col">
@@ -55,15 +40,23 @@ export const AndroidProjectModal: React.FC<{ onClose: () => void }> = ({ onClose
               {files.length} ملفًا جاهزًا للفتح في Android Studio
             </p>
           </div>
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={handleDownloadZip}
+          <div className="flex flex-wrap items-center gap-2">
+            <a
+              href="/tawasul-pwa-publish.zip"
+              download="tawasul-pwa-publish.zip"
+              className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold rounded-xl border border-emerald-700/30 bg-emerald-50 dark:bg-emerald-950/40 text-emerald-900 dark:text-emerald-300 hover:bg-emerald-100"
+            >
+              <Download className="w-4 h-4" />
+              <span>حزمة النشر الجاهزة (PWA)</span>
+            </a>
+            <a
+              href="/tawasul-android-project.zip"
+              download="tawasul-android-project.zip"
               className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold rounded-xl bg-emerald-800 hover:bg-emerald-700 text-white"
             >
               <Download className="w-4 h-4" />
-              <span>تنزيل الحزمة (.zip)</span>
-            </button>
+              <span>تنزيل مشروع Android (.zip)</span>
+            </a>
             <button
               type="button"
               onClick={onClose}
