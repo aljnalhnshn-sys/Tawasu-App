@@ -19,7 +19,7 @@ object FirebaseModule {
 
     @Provides
     @Singleton
-    fun provideFirebaseAuth(): FirebaseAuth = FirebaseAuth.getInstance()
+    fun provideFirebaseAuth(): FirebaseAuth = FirebaseAuth.getInstance(FirebaseApp.getInstance())
 
     @Provides
     @Singleton
@@ -36,7 +36,7 @@ object FirebaseModule {
 
     @Provides
     @Singleton
-    fun provideFirebaseStorage(): FirebaseStorage = FirebaseStorage.getInstance()
+    fun provideFirebaseStorage(): FirebaseStorage = FirebaseStorage.getInstance(FirebaseApp.getInstance())
 
     @Provides
     @Singleton

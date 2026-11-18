@@ -27,6 +27,7 @@ val localProps = Properties().apply {
 android {
     namespace = "com.tawasul.app"
     compileSdk = 35
+    buildToolsVersion = "35.0.0"
 
     defaultConfig {
         applicationId = "com.tawasul.app"

@@ -4,7 +4,7 @@ const { getFirestore } = require("firebase-admin/firestore");
 const { getMessaging } = require("firebase-admin/messaging");
 
 initializeApp();
-const db = getFirestore();
+const db = getFirestore("ai-studio-f0a6dc55-c580-4b93-91e9-381782a539f0");
 const messaging = getMessaging();
 
 /**
