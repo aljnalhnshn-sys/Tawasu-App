@@ -28,7 +28,7 @@ import {
   Video,
   WifiOff,
 } from 'lucide-react';
-import { auth } from './firebase';
+import { auth, ensureFirestoreNetwork } from './firebase';
 import { useOnlineStatus } from './hooks/useOnlineStatus';
 import { PWAInstallButton } from './components/PWAInstallButton';
 import { AndroidProjectModal } from './components/AndroidProjectModal';
@@ -126,6 +126,7 @@ export default function App() {
   const [firebaseUser, setFirebaseUser] = useState<FirebaseUser | null>(null);
   const [profile, setProfile] = useState<UserPublicProfile | null>(null);
   const [profileChecked, setProfileChecked] = useState(false);
+  const [profileLoadError, setProfileLoadError] = useState<string | null>(null);
   const [authBusy, setAuthBusy] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
 
@@ -196,6 +197,25 @@ export default function App() {
     localStorage.setItem('tawasul_theme', darkMode ? 'dark' : 'light');
   }, [darkMode]);
 
+  const loadSignedInProfile = async (user: FirebaseUser) => {
+    setProfileLoadError(null);
+    setAuthError(null);
+    try {
+      await ensureFirestoreNetwork();
+      const existing = await getUserProfile(user.uid);
+      setProfile(existing);
+      if (existing?.profileCompleted) {
+        updatePresence(user.uid, true);
+      }
+    } catch {
+      setProfileLoadError(
+        'تعذر الاتصال بخادم البيانات حاليًا. يرجى التحقق من اتصال الإنترنت والمحاولة مرة أخرى.'
+      );
+    } finally {
+      setProfileChecked(true);
+    }
+  };
+
   // Auth listener
   useEffect(() => {
     return onAuthStateChanged(auth, async (user) => {
@@ -203,24 +223,24 @@ export default function App() {
       setAuthReady(true);
       if (!user) {
         setProfile(null);
+        setProfileLoadError(null);
         setProfileChecked(true);
         setSelectedChat(null);
         return;
       }
       setSetupDisplayName(user.displayName || '');
-      try {
-        const existing = await getUserProfile(user.uid);
-        setProfile(existing);
-        if (existing?.profileCompleted) {
-          updatePresence(user.uid, true);
-        }
-      } catch {
-        setAuthError('تعذر الاتصال بخادم البيانات حاليًا. يرجى التحقق من اتصال الإنترنت والمحاولة مرة أخرى.');
-      } finally {
-        setProfileChecked(true);
-      }
+      await loadSignedInProfile(user);
     });
   }, []);
+
+  // Re-enable Firestore network and retry profile loading when browser reconnects
+  useEffect(() => {
+    if (!isOnline) return;
+    void ensureFirestoreNetwork();
+    if (firebaseUser && profileLoadError) {
+      void loadSignedInProfile(firebaseUser);
+    }
+  }, [isOnline, firebaseUser, profileLoadError]);
 
   // Subscriptions when authenticated and profile completed
   const blockedUidSet = useMemo(
@@ -228,20 +248,28 @@ export default function App() {
     [blockedUsers]
   );
 
+  const handleListenerError = () => {
+    showToast('حدث انقطاع مؤقت في المزامنة مع الخادم. سيتم إعادة المحاولة تلقائيًا.');
+  };
+
   useEffect(() => {
     if (!firebaseUser || !profile?.profileCompleted) return;
     const uid = firebaseUser.uid;
-    const unsubProfile = subscribeUserProfile(uid, (p) => {
-      if (p) {
-        setProfile(p);
-        setEditName(p.displayName);
-        setEditUsername(p.username);
-        setEditBio(p.bio);
-      }
-    });
-    const unsubBlocked = subscribeBlockedUsers(uid, setBlockedUsers);
-    const unsubChats = subscribeUserChats(uid, setChats);
-    const unsubIncoming = subscribeIncomingCall(uid, setIncomingCall);
+    const unsubProfile = subscribeUserProfile(
+      uid,
+      (p) => {
+        if (p) {
+          setProfile(p);
+          setEditName(p.displayName);
+          setEditUsername(p.username);
+          setEditBio(p.bio);
+        }
+      },
+      handleListenerError
+    );
+    const unsubBlocked = subscribeBlockedUsers(uid, setBlockedUsers, handleListenerError);
+    const unsubChats = subscribeUserChats(uid, setChats, handleListenerError);
+    const unsubIncoming = subscribeIncomingCall(uid, setIncomingCall, handleListenerError);
     const unsubCalls = subscribeCallHistory(uid, setCallHistory);
 
     const handleVisibility = () => {
@@ -261,7 +289,7 @@ export default function App() {
 
   useEffect(() => {
     if (!firebaseUser || !profile?.profileCompleted) return;
-    return subscribeActiveStatuses(blockedUidSet, setStatuses);
+    return subscribeActiveStatuses(blockedUidSet, setStatuses, handleListenerError);
   }, [firebaseUser, profile?.profileCompleted, blockedUidSet]);
 
   // Fetch missing peer profiles for direct chats
@@ -295,16 +323,20 @@ export default function App() {
     setOldestCursor(null);
     setHasMoreOlder(true);
 
-    return subscribeLatestMessages(selectedChat.id, (latest, oldestDoc) => {
-      setMessages(latest);
-      setOldestCursor((prev) => prev || oldestDoc);
-      markChatAsRead(
-        selectedChat.id,
-        firebaseUser.uid,
-        profile?.showReadReceipts ?? true,
-        latest
-      );
-    });
+    return subscribeLatestMessages(
+      selectedChat.id,
+      (latest, oldestDoc) => {
+        setMessages(latest);
+        setOldestCursor((prev) => prev || oldestDoc);
+        markChatAsRead(
+          selectedChat.id,
+          firebaseUser.uid,
+          profile?.showReadReceipts ?? true,
+          latest
+        );
+      },
+      handleListenerError
+    );
   }, [selectedChat?.id, firebaseUser?.uid]);
 
   const handleGoogleLogin = async () => {
@@ -369,6 +401,8 @@ export default function App() {
     try {
       const results = await searchUsersByUsername(val, firebaseUser.uid, blockedUidSet);
       setSearchResults(results);
+    } catch {
+      showToast('تعذر البحث عن المستخدمين حاليًا. تحقق من الاتصال.');
     } finally {
       setIsSearching(false);
     }
@@ -377,9 +411,13 @@ export default function App() {
   const handleOpenDirectChatWith = async (target: UserPublicProfile) => {
     if (!firebaseUser) return;
     setPeerProfiles((prev) => ({ ...prev, [target.uid]: target }));
-    const chat = await getOrCreateDirectChat(firebaseUser.uid, target.uid);
-    setSelectedChat(chat);
-    setActiveTab('chats');
+    try {
+      const chat = await getOrCreateDirectChat(firebaseUser.uid, target.uid);
+      setSelectedChat(chat);
+      setActiveTab('chats');
+    } catch {
+      showToast('تعذر فتح المحادثة حاليًا. يرجى التحقق من اتصال الإنترنت.');
+    }
   };
 
   const dispatchMessage = async (msgDraft: Message) => {
@@ -526,6 +564,8 @@ export default function App() {
       setOlderMessages((prev) => [...res.messages, ...prev]);
       setOldestCursor(res.nextOldest);
       if (res.messages.length === 0) setHasMoreOlder(false);
+    } catch {
+      showToast('تعذر تحميل الرسائل الأقدم حاليًا.');
     } finally {
       setLoadingOlder(false);
     }
@@ -633,6 +673,40 @@ export default function App() {
           <div className="text-center text-xs text-slate-400">تواصل · تطبيق مراسلة عربية</div>
         </div>
         {showAndroidModal && <AndroidProjectModal onClose={() => setShowAndroidModal(false)} />}
+      </div>
+    );
+  }
+
+  if (profileLoadError) {
+    return (
+      <div className={wrapperClass}>
+        <div className="min-h-screen flex items-center justify-center bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 p-6">
+          <div className="max-w-md w-full bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl p-6 space-y-4 text-center">
+            <div className="w-12 h-12 mx-auto rounded-2xl bg-amber-100 dark:bg-amber-950/60 text-amber-700 dark:text-amber-300 flex items-center justify-center">
+              <WifiOff className="w-6 h-6" />
+            </div>
+            <h1 className="text-lg font-bold font-display">تعذر الاتصال بقاعدة البيانات</h1>
+            <p className="text-xs text-slate-600 dark:text-slate-300 leading-relaxed">
+              {profileLoadError}
+            </p>
+            <div className="flex flex-col gap-2 pt-1">
+              <button
+                type="button"
+                onClick={() => void loadSignedInProfile(firebaseUser)}
+                className="w-full py-2.5 rounded-xl bg-emerald-800 hover:bg-emerald-700 text-white text-xs font-semibold"
+              >
+                إعادة المحاولة
+              </button>
+              <button
+                type="button"
+                onClick={() => void signOutAccount(firebaseUser.uid)}
+                className="w-full py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 text-xs font-medium"
+              >
+                تسجيل الخروج
+              </button>
+            </div>
+          </div>
+        </div>
       </div>
     );
   }
@@ -791,7 +865,13 @@ export default function App() {
             <div className="flex items-center gap-2">
               <button
                 type="button"
-                onClick={() => updateCallStatus(incomingCall.id, 'DECLINED')}
+                onClick={async () => {
+                  try {
+                    await updateCallStatus(incomingCall.id, 'DECLINED');
+                  } catch {
+                    showToast('تعذر تحديث حالة المكالمة.');
+                  }
+                }}
                 className="px-3 py-1.5 rounded-lg bg-red-600 text-xs font-semibold"
               >
                 رفض
@@ -929,9 +1009,13 @@ export default function App() {
                         <button
                           type="button"
                           onClick={async () => {
-                            await blockUser(firebaseUser.uid, u);
-                            setSearchResults((prev) => prev.filter((item) => item.uid !== u.uid));
-                            showToast(`تم حظر @${u.username}`);
+                            try {
+                              await blockUser(firebaseUser.uid, u);
+                              setSearchResults((prev) => prev.filter((item) => item.uid !== u.uid));
+                              showToast(`تم حظر @${u.username}`);
+                            } catch {
+                              showToast('تعذر حظر المستخدم حاليًا.');
+                            }
                           }}
                           className="p-2 rounded-lg text-slate-500 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-950/30"
                           title="حظر"
@@ -967,13 +1051,17 @@ export default function App() {
                       type="button"
                       disabled={!statusText.trim()}
                       onClick={async () => {
-                        await publishStatus({
-                          author: profile,
-                          type: 'TEXT',
-                          textContent: statusText,
-                        });
-                        setStatusText('');
-                        showToast('تم نشر حالتك لمدة 24 ساعة.');
+                        try {
+                          await publishStatus({
+                            author: profile,
+                            type: 'TEXT',
+                            textContent: statusText,
+                          });
+                          setStatusText('');
+                          showToast('تم نشر حالتك لمدة 24 ساعة.');
+                        } catch {
+                          showToast('تعذر نشر الحالة حاليًا. تحقق من الاتصال.');
+                        }
                       }}
                       className="flex-1 py-2 rounded-xl bg-emerald-800 text-white text-xs font-medium disabled:opacity-50"
                     >
@@ -1068,8 +1156,12 @@ export default function App() {
                         setGroupCandidates([]);
                         return;
                       }
-                      const res = await searchUsersByUsername(val, firebaseUser.uid, blockedUidSet);
-                      setGroupCandidates(res);
+                      try {
+                        const res = await searchUsersByUsername(val, firebaseUser.uid, blockedUidSet);
+                        setGroupCandidates(res);
+                      } catch {
+                        showToast('تعذر البحث عن الأعضاء حاليًا.');
+                      }
                     }}
                     placeholder="ابحث باسم المستخدم لإضافة أعضاء..."
                     className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-sm"
@@ -1104,17 +1196,21 @@ export default function App() {
                     type="button"
                     disabled={groupTitle.trim().length < 2 || selectedGroupUids.length === 0}
                     onClick={async () => {
-                      const created = await createGroupChat({
-                        creatorUid: firebaseUser.uid,
-                        title: groupTitle,
-                        memberUids: selectedGroupUids,
-                      });
-                      setGroupTitle('');
-                      setSelectedGroupUids([]);
-                      setGroupMemberQuery('');
-                      setGroupCandidates([]);
-                      setSelectedChat(created);
-                      setActiveTab('chats');
+                      try {
+                        const created = await createGroupChat({
+                          creatorUid: firebaseUser.uid,
+                          title: groupTitle,
+                          memberUids: selectedGroupUids,
+                        });
+                        setGroupTitle('');
+                        setSelectedGroupUids([]);
+                        setGroupMemberQuery('');
+                        setGroupCandidates([]);
+                        setSelectedChat(created);
+                        setActiveTab('chats');
+                      } catch (err) {
+                        showToast(err instanceof Error ? err.message : 'تعذر إنشاء المجموعة حاليًا.');
+                      }
                     }}
                     className="w-full py-2.5 rounded-xl bg-emerald-800 text-white text-xs font-semibold disabled:opacity-50"
                   >
@@ -1656,12 +1752,16 @@ export default function App() {
               <button
                 type="button"
                 onClick={async () => {
-                  await deleteMessageForCurrentUser(
-                    selectedChat.id,
-                    deleteTargetMsg.id,
-                    firebaseUser.uid
-                  );
-                  setDeleteTargetMsg(null);
+                  try {
+                    await deleteMessageForCurrentUser(
+                      selectedChat.id,
+                      deleteTargetMsg.id,
+                      firebaseUser.uid
+                    );
+                    setDeleteTargetMsg(null);
+                  } catch {
+                    showToast('تعذر حذف الرسالة حاليًا.');
+                  }
                 }}
                 className="px-4 py-2 rounded-xl text-xs bg-red-600 text-white font-semibold"
               >

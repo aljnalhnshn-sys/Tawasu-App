@@ -18,9 +18,9 @@ service firebase.storage {
 
     match /chats/{chatId}/{folder}/{fileName} {
       allow read: if isSignedIn()
-        && firestore.exists(/databases/(default)/documents/chats/$(chatId)/members/$(request.auth.uid));
+        && firestore.exists(/databases/ai-studio-f0a6dc55-c580-4b93-91e9-381782a539f0/documents/chats/$(chatId)/members/$(request.auth.uid));
       allow write: if isSignedIn()
-        && firestore.exists(/databases/(default)/documents/chats/$(chatId)/members/$(request.auth.uid))
+        && firestore.exists(/databases/ai-studio-f0a6dc55-c580-4b93-91e9-381782a539f0/documents/chats/$(chatId)/members/$(request.auth.uid))
         && (
           (folder == 'images' && request.resource.size <= 10 * 1024 * 1024 && request.resource.contentType.matches('image/.*')) ||
           (folder == 'audio' && request.resource.size <= 10 * 1024 * 1024 && request.resource.contentType.matches('audio/.*')) ||

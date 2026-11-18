@@ -59,9 +59,14 @@ service cloud.firestore {
 
     function isValidPrivateInfo(data, uid) {
       return data.keys().hasAll(['uid', 'email', 'updatedAt'])
-        && data.keys().hasOnly(['uid', 'email', 'updatedAt'])
+        && data.keys().hasOnly(['uid', 'email', 'fcmTokens', 'updatedAt'])
         && data.uid == uid
-        && data.email is string && data.email.size() <= 254;
+        && data.email is string && data.email.size() <= 254
+        && (!('fcmTokens' in data) || (
+          data.fcmTokens is list
+          && data.fcmTokens.size() <= 10
+          && (data.fcmTokens.size() == 0 || data.fcmTokens[0] is string)
+        ));
     }
 
     function isValidBlockedUser(data, blockedUid) {
@@ -207,7 +212,11 @@ service cloud.firestore {
           && isValidPrivateInfo(incoming(), uid)
           && incoming().uid == existing().uid
           && incoming().updatedAt == request.time
-          && incoming().diff(existing()).affectedKeys().hasOnly(['email', 'updatedAt']);
+          && (
+            incoming().diff(existing()).affectedKeys().hasOnly(['email', 'updatedAt']) ||
+            incoming().diff(existing()).affectedKeys().hasOnly(['fcmTokens', 'updatedAt']) ||
+            incoming().diff(existing()).affectedKeys().hasOnly(['email', 'fcmTokens', 'updatedAt'])
+          );
         allow delete: if isOwner(uid) && isValidId(uid);
       }
 

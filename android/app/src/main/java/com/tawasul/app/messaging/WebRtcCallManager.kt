@@ -71,7 +71,8 @@ class WebRtcCallManager @Inject constructor(
         peerConnection = peerFactory.createPeerConnection(
             rtcConfig,
             object : PeerConnection.Observer {
-                override fun onIceCandidate(candidate: IceCandidate) {
+                override fun onIceCandidate(candidate: IceCandidate?) {
+                    candidate ?: return
                     onIceCandidateGenerated(
                         IceCandidateModel(
                             senderUid = currentUid,
@@ -82,8 +83,8 @@ class WebRtcCallManager @Inject constructor(
                     )
                 }
 
-                override fun onAddTrack(receiver: RtpReceiver, mediaStreams: Array<out MediaStream>) {
-                    val track = receiver.track()
+                override fun onAddTrack(receiver: RtpReceiver?, mediaStreams: Array<out MediaStream>?) {
+                    val track = receiver?.track()
                     if (track is VideoTrack && remoteRenderer != null) {
                         track.addSink(remoteRenderer)
                     }
@@ -131,7 +132,8 @@ class WebRtcCallManager @Inject constructor(
             mandatory.add(MediaConstraints.KeyValuePair("OfferToReceiveVideo", "true"))
         }
         pc.createOffer(object : SimpleSdpObserver() {
-            override fun onCreateSuccess(sdp: SessionDescription) {
+            override fun onCreateSuccess(sdp: SessionDescription?) {
+                if (sdp == null) return
                 pc.setLocalDescription(SimpleSdpObserver(), sdp)
                 onOfferCreated(sdp.description)
             }
@@ -145,7 +147,8 @@ class WebRtcCallManager @Inject constructor(
             SessionDescription(SessionDescription.Type.OFFER, offerSdp)
         )
         pc.createAnswer(object : SimpleSdpObserver() {
-            override fun onCreateSuccess(sdp: SessionDescription) {
+            override fun onCreateSuccess(sdp: SessionDescription?) {
+                if (sdp == null) return
                 pc.setLocalDescription(SimpleSdpObserver(), sdp)
                 onAnswerCreated(sdp.description)
             }
@@ -186,7 +189,7 @@ class WebRtcCallManager @Inject constructor(
     }
 
     private open class SimpleSdpObserver : SdpObserver {
-        override fun onCreateSuccess(sdp: SessionDescription) {}
+        override fun onCreateSuccess(sdp: SessionDescription?) {}
         override fun onSetSuccess() {}
         override fun onCreateFailure(error: String?) {}
         override fun onSetFailure(error: String?) {}

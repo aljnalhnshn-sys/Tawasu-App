@@ -33,6 +33,7 @@
       "properties": {
         "uid": { "type": "string", "minLength": 1, "maxLength": 128 },
         "email": { "type": "string", "maxLength": 254 },
+        "fcmTokens": { "type": "array", "description": "Up to 10 registered FCM device tokens for push notifications." },
         "updatedAt": { "type": "string", "format": "date-time" }
       },
       "required": ["uid", "email", "updatedAt"]

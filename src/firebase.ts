@@ -2,6 +2,7 @@ import { initializeApp } from 'firebase/app';
 import { getAuth } from 'firebase/auth';
 import {
   doc,
+  enableNetwork,
   getDocFromServer,
   getFirestore,
   initializeFirestore,
@@ -97,7 +98,18 @@ export function handleFirestoreError(
   throw new Error(JSON.stringify(errInfo));
 }
 
+export async function ensureFirestoreNetwork(): Promise<void> {
+  try {
+    await enableNetwork(db);
+  } catch {
+    // Ignore if network cannot be re-enabled immediately
+  }
+}
+
 async function testConnection() {
+  if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+    return;
+  }
   try {
     await getDocFromServer(doc(db, 'test', 'connection'));
   } catch (error) {
@@ -107,4 +119,4 @@ async function testConnection() {
   }
 }
 
-testConnection();
+void testConnection();

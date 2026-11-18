@@ -133,7 +133,7 @@ class ChatRepository @Inject constructor(
                 "id" to chatId,
                 "type" to ChatType.GROUP.name,
                 "title" to cleanTitle,
-                "avatarUrl" to avatarUrl,
+                "avatarUrl" to avatarUrl.trim().take(1024),
                 "createdBy" to creatorUid,
                 "participantIds" to uniqueMembers,
                 "lastMessageText" to "تم إنشاء المجموعة",
@@ -234,6 +234,7 @@ class ChatRepository @Inject constructor(
             MessageType.SYSTEM -> trimmedText.take(120)
         }
 
+        val cleanMediaUrl = mediaUrl.trim().take(1048576)
         val batch = firestore.batch()
         batch.set(
             msgRef,
@@ -243,8 +244,8 @@ class ChatRepository @Inject constructor(
                 "senderId" to senderId,
                 "type" to type.name,
                 "text" to trimmedText,
-                "mediaUrl" to mediaUrl,
-                "mediaDurationSec" to mediaDurationSec,
+                "mediaUrl" to cleanMediaUrl,
+                "mediaDurationSec" to mediaDurationSec.coerceIn(0, 3600),
                 "deliveryStatus" to DeliveryStatus.SENT.name,
                 "readBy" to mapOf(senderId to System.currentTimeMillis()),
                 "deletedForUids" to emptyList<String>(),

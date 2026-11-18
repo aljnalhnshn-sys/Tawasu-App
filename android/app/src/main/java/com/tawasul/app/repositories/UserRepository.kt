@@ -98,7 +98,7 @@ class UserRepository @Inject constructor(
                 "usernameLower" to valid.lower,
                 "displayName" to cleanName,
                 "bio" to bio.trim().take(160),
-                "avatarUrl" to avatarUrl,
+                "avatarUrl" to avatarUrl.trim().take(1024),
                 "isOnline" to true,
                 "lastSeen" to FieldValue.serverTimestamp(),
                 "showOnlineStatus" to true,
@@ -181,7 +181,7 @@ class UserRepository @Inject constructor(
             val updates = mutableMapOf<String, Any>(
                 "displayName" to cleanName,
                 "bio" to bio.trim().take(160),
-                "avatarUrl" to avatarUrl,
+                "avatarUrl" to avatarUrl.trim().take(1024),
                 "updatedAt" to FieldValue.serverTimestamp()
             )
             if (targetUsername != null) {
@@ -247,13 +247,11 @@ class UserRepository @Inject constructor(
             usersCol.document(uid)
                 .collection(FirestorePaths.PRIVATE_SUBCOLLECTION)
                 .document(FirestorePaths.PRIVATE_INFO_DOC)
-                .set(
+                .update(
                     mapOf(
-                        "uid" to uid,
                         "fcmTokens" to FieldValue.arrayUnion(token),
                         "updatedAt" to FieldValue.serverTimestamp()
-                    ),
-                    SetOptions.merge()
+                    )
                 ).await()
         }
     }

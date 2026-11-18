@@ -73,6 +73,27 @@ export async function signOutAccount(uid?: string) {
   await firebaseSignOut(auth);
 }
 
+function toMillis(ts: { toMillis?: () => number } | null | undefined): number {
+  return ts && typeof ts.toMillis === 'function' ? ts.toMillis() : 0;
+}
+
+function forwardListenerError(
+  err: unknown,
+  op: OperationType,
+  path: string,
+  onError?: (err: Error) => void
+) {
+  try {
+    handleFirestoreError(err, op, path);
+  } catch (structured) {
+    if (onError && structured instanceof Error) {
+      onError(structured);
+      return;
+    }
+    throw structured;
+  }
+}
+
 export async function getUserProfile(uid: string): Promise<UserPublicProfile | null> {
   const path = `users/${uid}`;
   try {
@@ -85,13 +106,14 @@ export async function getUserProfile(uid: string): Promise<UserPublicProfile | n
 
 export function subscribeUserProfile(
   uid: string,
-  onData: (profile: UserPublicProfile | null) => void
+  onData: (profile: UserPublicProfile | null) => void,
+  onError?: (err: Error) => void
 ): Unsubscribe {
   const path = `users/${uid}`;
   return onSnapshot(
     doc(db, 'users', uid),
     (snap) => onData(snap.exists() ? (snap.data() as UserPublicProfile) : null),
-    (err) => handleFirestoreError(err, OperationType.GET, path)
+    (err) => forwardListenerError(err, OperationType.GET, path, onError)
   );
 }
 
@@ -309,13 +331,14 @@ export async function searchUsersByUsername(
 
 export function subscribeBlockedUsers(
   uid: string,
-  onData: (blocked: BlockedUser[]) => void
+  onData: (blocked: BlockedUser[]) => void,
+  onError?: (err: Error) => void
 ): Unsubscribe {
   const path = `users/${uid}/blocked`;
   return onSnapshot(
     collection(db, 'users', uid, 'blocked'),
     (snap) => onData(snap.docs.map((d) => d.data() as BlockedUser)),
-    (err) => handleFirestoreError(err, OperationType.LIST, path)
+    (err) => forwardListenerError(err, OperationType.LIST, path, onError)
   );
 }
 
@@ -346,18 +369,23 @@ export async function unblockUser(currentUid: string, targetUid: string) {
 
 export function subscribeUserChats(
   uid: string,
-  onData: (chats: Chat[]) => void
+  onData: (chats: Chat[]) => void,
+  onError?: (err: Error) => void
 ): Unsubscribe {
   const path = 'chats';
   const q = query(
     collection(db, 'chats'),
-    where('participantIds', 'array-contains', uid),
-    orderBy('lastMessageAt', 'desc')
+    where('participantIds', 'array-contains', uid)
   );
   return onSnapshot(
     q,
-    (snap) => onData(snap.docs.map((d) => ({ ...(d.data() as Chat), id: d.id }))),
-    (err) => handleFirestoreError(err, OperationType.LIST, path)
+    (snap) => {
+      const sorted = snap.docs
+        .map((d) => ({ ...(d.data() as Chat), id: d.id }))
+        .sort((a, b) => toMillis(b.lastMessageAt) - toMillis(a.lastMessageAt));
+      onData(sorted);
+    },
+    (err) => forwardListenerError(err, OperationType.LIST, path, onError)
   );
 }
 
@@ -490,7 +518,8 @@ export async function createGroupChat(params: {
 
 export function subscribeLatestMessages(
   chatId: string,
-  onData: (messages: Message[], oldestDoc: QueryDocumentSnapshot | null) => void
+  onData: (messages: Message[], oldestDoc: QueryDocumentSnapshot | null) => void,
+  onError?: (err: Error) => void
 ): Unsubscribe {
   const path = `chats/${chatId}/messages`;
   const q = query(
@@ -506,7 +535,7 @@ export function subscribeLatestMessages(
       const msgs = docs.map((d) => ({ ...(d.data() as Message), id: d.id })).reverse();
       onData(msgs, oldest);
     },
-    (err) => handleFirestoreError(err, OperationType.LIST, path)
+    (err) => forwardListenerError(err, OperationType.LIST, path, onError)
   );
 }
 
@@ -645,7 +674,8 @@ export async function deleteMessageForCurrentUser(
 
 export function subscribeActiveStatuses(
   blockedUids: Set<string>,
-  onData: (items: StatusItem[]) => void
+  onData: (items: StatusItem[]) => void,
+  onError?: (err: Error) => void
 ): Unsubscribe {
   const path = 'statuses';
   const q = query(
@@ -662,7 +692,7 @@ export function subscribeActiveStatuses(
         .filter((s) => !blockedUids.has(s.authorUid));
       onData(items);
     },
-    (err) => handleFirestoreError(err, OperationType.LIST, path)
+    (err) => forwardListenerError(err, OperationType.LIST, path, onError)
   );
 }
 
@@ -709,22 +739,24 @@ export async function markStatusViewed(statusId: string, viewerUid: string) {
 
 export function subscribeIncomingCall(
   uid: string,
-  onData: (session: CallSession | null) => void
+  onData: (session: CallSession | null) => void,
+  onError?: (err: Error) => void
 ): Unsubscribe {
   const path = 'calls';
   const q = query(
     collection(db, 'calls'),
     where('calleeUid', '==', uid),
-    where('status', '==', 'RINGING'),
-    limit(1)
+    limit(10)
   );
   return onSnapshot(
     q,
     (snap) => {
-      const docSnap = snap.docs[0];
-      onData(docSnap ? ({ ...(docSnap.data() as CallSession), id: docSnap.id }) : null);
+      const ringing = snap.docs
+        .map((d) => ({ ...(d.data() as CallSession), id: d.id }))
+        .find((c) => c.status === 'RINGING');
+      onData(ringing || null);
     },
-    (err) => handleFirestoreError(err, OperationType.LIST, path)
+    (err) => forwardListenerError(err, OperationType.LIST, path, onError)
   );
 }
 
@@ -732,18 +764,20 @@ export function subscribeCallHistory(
   uid: string,
   onData: (sessions: CallSession[]) => void
 ): Unsubscribe {
-  const path = 'calls';
   const q = query(
     collection(db, 'calls'),
     where('callerUid', '==', uid),
-    orderBy('createdAt', 'desc'),
     limit(20)
   );
   return onSnapshot(
     q,
-    (snap) => onData(snap.docs.map((d) => ({ ...(d.data() as CallSession), id: d.id }))),
+    (snap) => {
+      const sorted = snap.docs
+        .map((d) => ({ ...(d.data() as CallSession), id: d.id }))
+        .sort((a, b) => toMillis(b.createdAt) - toMillis(a.createdAt));
+      onData(sorted);
+    },
     () => {
-      // Fallback if index not yet ready or empty
       onData([]);
     }
   );
